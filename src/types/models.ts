@@ -1,28 +1,114 @@
 export type WeightUnit = 'kg' | 'lb';
+export type ExerciseKind = 'strength' | 'cardio';
+export type CardioIntensity = 'low' | 'moderate' | 'high';
+export const EQUIPMENT = ['none', 'dumbbell', 'barbell', 'machine', 'bodyweight', 'band', 'kettlebell', 'cable'] as const;
+export type Equipment = (typeof EQUIPMENT)[number];
+export const PROGRAM_TYPES = ['upper_lower', 'push_pull_legs', 'full_body', 'home_bodyweight', 'custom'] as const;
+export type ProgramType = (typeof PROGRAM_TYPES)[number];
 
 export type SetLog = {
-  id: string;
+  id?: string;
   exerciseId: string;
+  exerciseName?: string;
   sessionId: string;
+  kind?: ExerciseKind;
   setNumber: number;
-  weight: number;
-  reps: number;
-  completed: boolean;
+  weight?: number;
+  reps?: number;
+  durationMin?: number;
+  distanceKm?: number | null;
+  intensity?: CardioIntensity | null;
+  caloriesBurned?: number | null;
+  avgHeartRate?: number | null;
+  completed?: boolean;
   notes?: string;
   completedAt?: string;
 };
 
 export type Exercise = {
   id: string;
-  userId: string;
   name: string;
+  type: ExerciseKind;
   muscleGroup: string;
+  notes?: string;
+  targetSets?: number | null;
+  targetRepMin?: number | null;
+  targetRepMax?: number | null;
+  restSeconds: number | null;
+  restSuggested?: number | null;
+  restOverridden?: boolean;
+  unit: WeightUnit;
+  equipment: Equipment;
+  progressionPath: string[];
+  createdBy: string | null;
+  isCustom: boolean;
+  seedKey?: string | null;
+  metBasis?: string | null;
+  archived: boolean;
+  referenceImageUrl: string | null;
+  referenceInstructions: string[];
+};
+
+export type ProgramExercise = {
+  exerciseId: string;
+  exerciseName?: string;
   targetSets: number;
   targetRepMin: number;
   targetRepMax: number;
-  restSeconds: number;
-  unit: WeightUnit;
-  archived: boolean;
+};
+
+export type ProgramDay = {
+  dayLabel: string;
+  exercises: ProgramExercise[];
+};
+
+export type Program = {
+  id: string;
+  name: string;
+  description: string;
+  type: ProgramType;
+  daysPerWeek: number;
+  createdBy: string | null;
+  isCustom: boolean;
+  days: ProgramDay[];
+};
+
+export type UserProgram = {
+  id: string;
+  userId: string;
+  programId: string;
+  startedAt: string;
+  active: boolean;
+  currentDayIndex: number;
+};
+
+export type BodyweightSuggestion = {
+  repMin: number;
+  repMax: number;
+  note: string;
+  progressed: boolean;
+  nextVariation: { id: string; name: string } | null;
+};
+
+export type ActiveProgramSlot = ProgramExercise & {
+  equipment?: Equipment | null;
+  suggestion: BodyweightSuggestion | null;
+};
+
+export type ActiveProgram = {
+  assignment: {
+    id: string;
+    programId: string;
+    startedAt: string;
+    currentDayIndex: number;
+    active: boolean;
+  };
+  program: Program;
+  today: {
+    dayIndex: number;
+    dayLabel: string;
+    exercises: ActiveProgramSlot[];
+  };
 };
 
 export type WorkoutDay = {
@@ -36,33 +122,109 @@ export type WorkoutDay = {
 
 export type WorkoutSession = {
   id: string;
+  _id?: string;
   userId: string;
-  workoutDayId: string;
+  workoutDayId?: string;
+  userProgramId?: string;
+  programId?: string;
+  dayIndex?: number;
+  dayLabel?: string;
   startedAt: string;
   completedAt?: string;
   totalVolume: number;
   notes?: string;
+  sets?: SetLog[];
+  exerciseNames?: string[];
+  kinds?: ExerciseKind[];
+  cardioDurationMin?: number;
+  cardioCaloriesBurned?: number | null;
 };
 
-export type PersonalRecord = {
-  id: string;
-  userId: string;
-  exerciseId: string;
-  metric: 'weight' | 'reps' | 'volume';
-  value: number;
-  achievedAt: string;
-  sessionId: string;
+export type StrengthProgressPoint = {
+  date: string;
+  maxWeight: number;
+  maxVolume: number;
+  totalVolume: number;
 };
+
+export type CardioProgressPoint = {
+  date: string;
+  durationMin: number;
+  distanceKm: number;
+  paceMinPerKm: number | null;
+  caloriesBurned: number | null;
+};
+
+export type ExerciseProgress =
+  | { type: 'strength'; points: StrengthProgressPoint[] }
+  | { type: 'cardio'; points: CardioProgressPoint[] };
 
 export type UserProfile = {
   id: string;
   email: string;
   weightUnit: WeightUnit;
+  weightKg: number | null;
   createdAt: string;
+};
+
+export type CardioPeriodTotal = {
+  from: string;
+  to: string;
+  durationMin: number;
+  caloriesBurned: number;
+  sessions: number;
+};
+
+export type WorkoutCalorieSummary = {
+  week: CardioPeriodTotal;
+  month: CardioPeriodTotal;
 };
 
 export type WorkoutSummary = {
   workoutsCompleted: number;
   totalVolume: number;
   streak: number;
+};
+
+export type NutritionGoalKind = 'cut' | 'maintain' | 'bulk';
+export type NutritionGoalSource = 'auto' | 'manual';
+export type ActivityLevel = 'sedentary' | 'light' | 'moderate' | 'active' | 'very_active';
+export type Sex = 'male' | 'female';
+
+export type NutritionGoals = {
+  dailyCalories: number;
+  dailyProtein: number;
+  dailyWater: number;
+  goal: NutritionGoalKind;
+  source: NutritionGoalSource;
+  updatedAt: string;
+};
+
+export type NutritionMeal = {
+  _id: string;
+  name: string;
+  calories: number;
+  protein: number;
+  carbs: number;
+  fat: number;
+  loggedAt: string;
+};
+
+export type NutritionDayLog = {
+  date: string;
+  meals: NutritionMeal[];
+  waterMl: number;
+  createdAt?: string;
+  updatedAt?: string;
+  goals: NutritionGoals | null;
+  needsOnboarding: boolean;
+};
+
+export type NutritionSuggestion = {
+  dailyCalories: number;
+  dailyProtein: number;
+  dailyWater: number;
+  goal: NutritionGoalKind;
+  bmr: number;
+  tdee: number;
 };

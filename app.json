@@ -23,7 +23,17 @@
     },
     "plugins": [
       "expo-font",
-      "expo-secure-store"
+      "expo-secure-store",
+      [
+        "expo-localization",
+        {
+          "supportsRTL": true,
+          "supportedLocales": {
+            "ios": ["en", "fr", "ar"],
+            "android": ["en", "fr", "ar"]
+          }
+        }
+      ]
     ]
   }
 }
