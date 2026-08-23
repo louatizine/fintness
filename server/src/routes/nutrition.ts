@@ -19,7 +19,8 @@ type NutritionGoalDoc = {
   dailyProtein: number;
   dailyWater: number;
   goal: Goal;
-  source: 'auto' | 'manual';
+  source: 'auto' | 'manual' | 'coach';
+  setByCoachId?: string | null;
   updatedAt: string;
 };
 
@@ -61,6 +62,15 @@ function asFiniteNumber(value: unknown): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+function asObjectId(value: unknown): ObjectId | null {
+  if (typeof value !== 'string' || !/^[a-fA-F0-9]{24}$/.test(value)) return null;
+  try {
+    return new ObjectId(value);
+  } catch {
+    return null;
+  }
+}
+
 function isGoal(value: unknown): value is Goal {
   return typeof value === 'string' && (GOALS as readonly string[]).includes(value);
 }
@@ -92,9 +102,22 @@ function publicGoals(doc: NutritionGoalDoc | null) {
     dailyProtein: doc.dailyProtein,
     dailyWater: doc.dailyWater,
     goal: doc.goal,
-    source: doc.source,
+    source: doc.source === 'coach' ? 'coach' as const : doc.source === 'manual' ? 'manual' as const : 'auto' as const,
+    setByCoachId: typeof doc.setByCoachId === 'string' ? doc.setByCoachId : null,
+    setByCoachName: null as string | null,
     updatedAt: doc.updatedAt,
   };
+}
+
+async function publicGoalsWithCoach(doc: NutritionGoalDoc | null) {
+  const goals = publicGoals(doc);
+  if (!goals?.setByCoachId) return goals;
+  const coachId = asObjectId(goals.setByCoachId);
+  if (!coachId) return goals;
+  const coach = await getDb().collection('users').findOne({ _id: coachId });
+  const name = (coach?.coachProfile as { displayName?: string } | undefined)?.displayName?.trim()
+    || (typeof coach?.email === 'string' ? coach.email.split('@')[0] : 'Coach');
+  return { ...goals, setByCoachName: name };
 }
 
 function publicLog(doc: NutritionLogDoc | null, date: string) {
@@ -157,12 +180,12 @@ nutritionRouter.post('/goals', async (req: Request, res: Response) => {
     const doc = await goalsCol().findOneAndUpdate(
       { userId },
       {
-        $set: { dailyCalories, dailyProtein, dailyWater, goal, source: 'manual', updatedAt },
+        $set: { dailyCalories, dailyProtein, dailyWater, goal, source: 'manual', setByCoachId: null, updatedAt },
         $setOnInsert: { userId },
       },
       { upsert: true, returnDocument: 'after' }
     );
-    res.json({ goals: publicGoals(doc), needsOnboarding: false });
+    res.json({ goals: await publicGoalsWithCoach(doc), needsOnboarding: false });
   } catch (err) {
     console.error('Save nutrition goals error:', err);
     res.status(500).json({ error: 'Internal server error' });
@@ -176,7 +199,7 @@ nutritionRouter.get('/goals', async (req: Request, res: Response) => {
       res.json({ goals: null, needsOnboarding: true });
       return;
     }
-    res.json({ goals: publicGoals(doc), needsOnboarding: false });
+    res.json({ goals: await publicGoalsWithCoach(doc), needsOnboarding: false });
   } catch (err) {
     console.error('Get nutrition goals error:', err);
     res.status(500).json({ error: 'Internal server error' });
@@ -297,7 +320,7 @@ nutritionRouter.get('/log/:date', async (req: Request, res: Response) => {
     ]);
     res.json({
       ...publicLog(logDoc, date),
-      goals: publicGoals(goalDoc),
+      goals: await publicGoalsWithCoach(goalDoc),
       needsOnboarding: !goalDoc,
     });
   } catch (err) {

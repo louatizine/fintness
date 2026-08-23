@@ -19,7 +19,7 @@ import { ExerciseHowToModal, ExerciseThumb, HowToButton } from '../components/Ex
 import { ProgramPicker } from './ProgramPicker';
 import { EmptyState } from '../components/EmptyState';
 import { ScreenSkeleton } from '../components/Skeleton';
-import { colors, radius, spacing } from '../theme';
+import { radius, spacing, useTheme, useThemedStyles, type ThemeColors } from '../theme';
 import { apiErrorMessage, formatDate } from '../../i18n';
 import type { ActiveProgramSlot, CardioIntensity, Equipment, Exercise, ExerciseKind, SetLog } from '../types/models';
 import { EQUIPMENT } from '../types/models';
@@ -38,6 +38,7 @@ type Draft = {
 type ActiveState = {
   assignment: { id: string; programId: string; startedAt: string; currentDayIndex: number; active: boolean };
   programName: string;
+  assignedByCoachName: string | null;
   today: { dayIndex: number; dayLabel: string; exercises: ActiveProgramSlot[] };
 };
 
@@ -57,7 +58,14 @@ function formatRest(seconds: number) {
   return `${m}:${String(s).padStart(2, '0')}`;
 }
 
+function useScreenTheme() {
+  const { colors } = useTheme();
+  const styles = useThemedStyles(createStyles);
+  return { colors, styles };
+}
+
 function Chip({ label, active, onPress }: { label: string; active: boolean; onPress: () => void }) {
+  const { styles } = useScreenTheme();
   return (
     <Pressable onPress={onPress} style={[styles.chip, active && styles.chipActive]}>
       <Text style={[styles.chipText, active && styles.chipTextActive]}>{label}</Text>
@@ -81,6 +89,7 @@ function Stepper({
   min?: number;
 }) {
   const numeric = typeof value === 'number' ? value : 0;
+  const { styles } = useScreenTheme();
   return (
     <View>
       <Text style={styles.controlLabel}>{label}</Text>
@@ -110,6 +119,7 @@ function AddExerciseForm({
   metOptions: Exercise[];
 }) {
   const { t } = useTranslation();
+  const { colors, styles } = useScreenTheme();
   const [name, setName] = useState('');
   const [type, setType] = useState<ExerciseKind>('strength');
   const [muscleGroup, setMuscleGroup] = useState('legs');
@@ -195,6 +205,7 @@ function AddExerciseForm({
 
 export function TodayScreen() {
   const { t } = useTranslation();
+  const { colors, styles } = useScreenTheme();
   const [library, setLibrary] = useState<Exercise[]>([]);
   const [lineupIds, setLineupIds] = useState<string[]>([]);
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
@@ -224,7 +235,7 @@ export function TodayScreen() {
       setLibrary(list);
       setWeightKg(profile?.weightKg ?? null);
       const nextActive = program.assignment && program.today && program.program
-        ? { assignment: program.assignment, programName: program.program.name, today: program.today }
+        ? { assignment: program.assignment, programName: program.program.name, assignedByCoachName: program.program.assignedByCoachName ?? null, today: program.today }
         : null;
       setActive(nextActive);
       const nextKey = nextActive ? `${nextActive.assignment.id}:${nextActive.today.dayIndex}` : 'free';
@@ -436,6 +447,7 @@ export function TodayScreen() {
             <Text style={styles.eyebrow}>{todayLabel}</Text>
             <Text style={styles.title}>{active ? active.today.dayLabel : t('today.title')}</Text>
             {active ? <Text style={styles.programName}>{active.programName}</Text> : null}
+            {active?.assignedByCoachName ? <Text style={styles.programName}>{t('today.assignedByCoach', { name: active.assignedByCoachName })}</Text> : null}
           </View>
           <Pressable onPress={() => setBrowsePrograms((open) => !open)} style={styles.programLink}>
             <Text style={styles.programLinkText}>{browsePrograms ? t('today.workout') : active ? t('today.change') : t('today.programs')}</Text>
@@ -484,7 +496,7 @@ export function TodayScreen() {
 
             <View style={styles.sessionMeta}>
               <Text style={styles.metaLabel}>{t('today.sessionProgress')}</Text>
-              <Text style={styles.metaValue}>{t('today.logged', { n: doneCount })}</Text>
+              <Text style={[styles.metaValue, doneCount > 0 && { color: colors.success }]}>{t('today.logged', { n: doneCount })}</Text>
             </View>
 
             {lineup.length === 0 ? (
@@ -551,7 +563,7 @@ export function TodayScreen() {
                         />
                       </View>
                       <Pressable style={[styles.completeButton, saving && styles.disabled]} disabled={saving} onPress={() => void completeStrength(exercise)}>
-                        <Ionicons name="checkmark-circle" size={22} color={colors.accentDark} />
+                        <Ionicons name="checkmark-circle" size={22} color={done ? colors.success : colors.ink} />
                         <Text style={styles.completeText} numberOfLines={2}>{done ? t('today.completeSetDone', { n: done }) : t('today.completeSet')}</Text>
                       </Pressable>
                     </>
@@ -590,7 +602,7 @@ export function TodayScreen() {
                         <Text style={styles.target}>{t('today.lastLogKcal', { kcal: lastCalories[exercise.id] })}</Text>
                       ) : null}
                       <Pressable style={[styles.completeButton, saving && styles.disabled]} disabled={saving} onPress={() => void completeCardio(exercise)}>
-                        <Ionicons name="checkmark-circle" size={22} color={colors.accentDark} />
+                        <Ionicons name="checkmark-circle" size={22} color={done ? colors.success : colors.ink} />
                         <Text style={styles.completeText} numberOfLines={2}>{done ? t('today.logCardioDone', { n: done }) : t('today.logCardio')}</Text>
                       </Pressable>
                     </>
@@ -669,8 +681,9 @@ export function TodayScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: colors.background },
+function createStyles(colors: ThemeColors) {
+  return StyleSheet.create({
+    screen: { flex: 1, backgroundColor: colors.background },
   content: { padding: spacing.lg, paddingBottom: 48 },
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: spacing.lg, paddingTop: spacing.sm },
   eyebrow: { color: colors.accent, fontSize: 12, fontWeight: '700', letterSpacing: 1 },
@@ -679,19 +692,19 @@ const styles = StyleSheet.create({
   programLink: { minHeight: 44, paddingVertical: 8, paddingHorizontal: 4, justifyContent: 'center' },
   programLinkText: { color: colors.gold, fontWeight: '800', fontSize: 13 },
   timer: { backgroundColor: colors.accent, borderRadius: radius.md, padding: spacing.md, marginBottom: spacing.md, flexDirection: 'row', alignItems: 'center', gap: spacing.md },
-  timerLabel: { color: colors.accentDark, fontSize: 11, fontWeight: '800' },
-  timerValue: { color: colors.accentDark, fontSize: 26, fontWeight: '900' },
+  timerLabel: { color: colors.ink, fontSize: 11, fontWeight: '800' },
+  timerValue: { color: colors.ink, fontSize: 26, fontWeight: '900' },
   ltr: { direction: 'ltr' },
   timerActions: { marginStart: 'auto', flexDirection: 'row', gap: spacing.sm },
   timerHit: { minHeight: 44, minWidth: 44, justifyContent: 'center', paddingHorizontal: 4 },
-  timerButton: { color: colors.accentDark, fontWeight: '800' },
+  timerButton: { color: colors.ink, fontWeight: '800' },
   sessionMeta: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: spacing.sm },
   metaLabel: { color: colors.muted, fontSize: 12, fontWeight: '700' },
   metaValue: { color: colors.text, fontWeight: '700' },
-  banner: { color: colors.gold, backgroundColor: colors.accentDark, borderRadius: radius.md, padding: spacing.sm, marginBottom: spacing.md, fontSize: 13, fontWeight: '700' },
+  banner: { color: colors.gold, backgroundColor: colors.accentMuted, borderRadius: radius.md, padding: spacing.sm, marginBottom: spacing.md, fontSize: 13, fontWeight: '700' },
   bannerButton: { marginBottom: 0 },
   hint: { color: colors.muted, fontSize: 12, lineHeight: 17, marginBottom: 6 },
-  suggestion: { marginTop: spacing.sm, backgroundColor: colors.accentDark, borderRadius: radius.sm, padding: spacing.sm },
+  suggestion: { marginTop: spacing.sm, backgroundColor: colors.accentMuted, borderRadius: radius.sm, padding: spacing.sm },
   suggestionNote: { color: colors.gold, fontSize: 12, lineHeight: 17, fontWeight: '700' },
   variationButton: { marginTop: 8, minHeight: 44, justifyContent: 'center' },
   variationText: { color: colors.text, fontWeight: '800', fontSize: 12 },
@@ -710,7 +723,7 @@ const styles = StyleSheet.create({
   controlValue: { minWidth: 50, color: colors.text, fontSize: 20, fontWeight: '800', textAlign: 'center' },
   unit: { color: colors.muted, fontSize: 12 },
   completeButton: { marginTop: spacing.lg, backgroundColor: colors.accent, borderRadius: radius.sm, minHeight: 48, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 8, paddingHorizontal: 12 },
-  completeText: { color: colors.accentDark, fontWeight: '900', textAlign: 'center' },
+  completeText: { color: colors.ink, fontWeight: '900', textAlign: 'center' },
   dayActions: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, marginTop: spacing.sm },
   skipDay: { marginTop: spacing.lg, paddingHorizontal: spacing.md, minHeight: 48, justifyContent: 'center' },
   skipDayText: { color: colors.muted, fontWeight: '800' },
@@ -735,5 +748,6 @@ const styles = StyleSheet.create({
   libraryName: { color: colors.text, fontWeight: '800', fontSize: 16 },
   libraryMeta: { color: colors.muted, fontSize: 12, marginTop: 3, textTransform: 'capitalize' },
   libraryDelete: { minWidth: 44, minHeight: 44, paddingHorizontal: spacing.md, justifyContent: 'center', alignItems: 'center' },
-  iconHit: { minWidth: 44, minHeight: 44, alignItems: 'center', justifyContent: 'center' },
-});
+    iconHit: { minWidth: 44, minHeight: 44, alignItems: 'center', justifyContent: 'center' },
+  });
+}

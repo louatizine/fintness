@@ -3,19 +3,32 @@ import { ActivityIndicator, Animated, I18nManager, KeyboardAvoidingView, Platfor
 import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
 import { auth } from '../services/api';
-import { colors, radius, spacing } from '../theme';
+import { radius, spacing, useTheme, useThemedStyles, type ThemeColors } from '../theme';
 import { LanguagePicker } from '../components/LanguagePicker';
 import { apiErrorMessage } from '../../i18n';
+import { COACH_SPECIALTIES, type ContactPreference, type UserRole } from '../types/models';
+import { CoachChip } from './coaches/coachUi';
 
-type Props = { onAuthenticated: () => void };
+type Props = { onAuthenticated: (role: UserRole) => void };
 const validEmail = (value: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
+const PREFS: ContactPreference[] = ['app', 'email', 'phone'];
 
 export function LoginScreen({ onAuthenticated }: Props) {
   const { t } = useTranslation();
+  const { colors } = useTheme();
+  const styles = useThemedStyles(createStyles);
   const [mode, setMode] = useState<'login' | 'signup'>('login');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmation, setConfirmation] = useState('');
+  const [role, setRole] = useState<UserRole>('athlete');
+  const [displayName, setDisplayName] = useState('');
+  const [bio, setBio] = useState('');
+  const [specialties, setSpecialties] = useState<string[]>([]);
+  const [certifications, setCertifications] = useState('');
+  const [contactPreference, setContactPreference] = useState<ContactPreference>('app');
+  const [coachEmail, setCoachEmail] = useState('');
+  const [phone, setPhone] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const shake = useRef(new Animated.Value(0)).current;
@@ -36,11 +49,28 @@ export function LoginScreen({ onAuthenticated }: Props) {
     if (!validEmail(email)) return showError(t('login.invalidEmail'));
     if (password.length < 8) return showError(t('login.passwordTooShort'));
     if (mode === 'signup' && password !== confirmation) return showError(t('login.passwordMismatch'));
+    if (mode === 'signup' && role === 'coach') {
+      if (displayName.trim().length < 2) return showError(t('login.coachNameRequired'));
+      if (bio.trim().length < 10) return showError(t('login.coachBioRequired'));
+      if (specialties.length < 1) return showError(t('login.coachSpecialtyRequired'));
+    }
     setLoading(true);
     try {
-      if (mode === 'login') await auth.login(email.trim(), password);
-      else await auth.register(email.trim(), password);
-      onAuthenticated();
+      const session = mode === 'login'
+        ? await auth.login(email.trim(), password)
+        : await auth.register(email.trim(), password, role === 'coach' ? {
+          role: 'coach',
+          coachProfile: {
+            displayName: displayName.trim(),
+            bio: bio.trim(),
+            specialties,
+            certifications: certifications.trim(),
+            contactPreference,
+            email: (coachEmail.trim() || email.trim()),
+            phone: phone.trim(),
+          },
+        } : { role: 'athlete' });
+      onAuthenticated(session.role);
     } catch (requestError) {
       showError(apiErrorMessage(requestError, t('login.networkError')));
     } finally {
@@ -77,6 +107,55 @@ export function LoginScreen({ onAuthenticated }: Props) {
           {mode === 'signup' && <>
             <Text style={styles.label}>{t('login.confirmPassword')}</Text>
             <TextInput value={confirmation} onChangeText={setConfirmation} placeholder={t('login.confirmPlaceholder')} placeholderTextColor={colors.muted} secureTextEntry style={styles.input} editable={!loading} />
+            <Text style={styles.label}>{t('login.accountType')}</Text>
+            <View style={styles.switcher}>
+              <Pressable onPress={() => setRole('athlete')} style={[styles.switch, role === 'athlete' && styles.switchActive]}>
+                <Text style={[styles.switchText, role === 'athlete' && styles.switchTextActive]} numberOfLines={2}>{t('login.roleAthlete')}</Text>
+              </Pressable>
+              <Pressable onPress={() => setRole('coach')} style={[styles.switch, role === 'coach' && styles.switchActive]}>
+                <Text style={[styles.switchText, role === 'coach' && styles.switchTextActive]} numberOfLines={2}>{t('login.roleCoach')}</Text>
+              </Pressable>
+            </View>
+            {role === 'coach' ? (
+              <>
+                <Text style={styles.hint}>{t('login.coachSignupHint')}</Text>
+                <Text style={styles.label}>{t('coaches.displayName')}</Text>
+                <TextInput value={displayName} onChangeText={setDisplayName} placeholder={t('coaches.displayNamePlaceholder')} placeholderTextColor={colors.muted} style={styles.input} editable={!loading} />
+                <Text style={styles.label}>{t('coaches.bio')}</Text>
+                <TextInput value={bio} onChangeText={setBio} placeholder={t('coaches.bioPlaceholder')} placeholderTextColor={colors.muted} style={[styles.input, styles.multiline]} multiline editable={!loading} />
+                <Text style={styles.label}>{t('coaches.specialtiesLabel')}</Text>
+                <View style={styles.chipRow}>
+                  {COACH_SPECIALTIES.map((item) => (
+                    <CoachChip
+                      key={item}
+                      label={t(`coaches.specialties.${item}`)}
+                      active={specialties.includes(item)}
+                      onPress={() => setSpecialties((current) => current.includes(item) ? current.filter((value) => value !== item) : [...current, item].slice(0, 8))}
+                    />
+                  ))}
+                </View>
+                <Text style={styles.label}>{t('coaches.certifications')} ({t('common.optional')})</Text>
+                <TextInput value={certifications} onChangeText={setCertifications} placeholder={t('coaches.certificationsPlaceholder')} placeholderTextColor={colors.muted} style={styles.input} editable={!loading} />
+                <Text style={styles.label}>{t('coaches.contactPreference')}</Text>
+                <View style={styles.chipRow}>
+                  {PREFS.map((pref) => (
+                    <CoachChip key={pref} label={t(`coaches.pref.${pref}`)} active={contactPreference === pref} onPress={() => setContactPreference(pref)} />
+                  ))}
+                </View>
+                {contactPreference === 'email' ? (
+                  <>
+                    <Text style={styles.label}>{t('coaches.contactEmail')}</Text>
+                    <TextInput value={coachEmail} onChangeText={setCoachEmail} autoCapitalize="none" keyboardType="email-address" placeholder={email || t('login.emailPlaceholder')} placeholderTextColor={colors.muted} style={styles.input} editable={!loading} />
+                  </>
+                ) : null}
+                {contactPreference === 'phone' ? (
+                  <>
+                    <Text style={styles.label}>{t('coaches.contactPhone')}</Text>
+                    <TextInput value={phone} onChangeText={setPhone} keyboardType="phone-pad" placeholder={t('coaches.phonePlaceholder')} placeholderTextColor={colors.muted} style={styles.input} editable={!loading} />
+                  </>
+                ) : null}
+              </>
+            ) : <Text style={styles.hint}>{t('login.athleteSignupHint')}</Text>}
           </>}
         </View>
         <Animated.View style={{ transform: [{ translateX: shake.interpolate({ inputRange: [-1, 1], outputRange: [-8, 8] }) }] }}>
@@ -99,7 +178,8 @@ export function LoginScreen({ onAuthenticated }: Props) {
   );
 }
 
-const styles = StyleSheet.create({
+function createStyles(colors: ThemeColors) {
+  return StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.background },
   content: { flexGrow: 1, justifyContent: 'center', padding: spacing.lg },
   brand: { alignItems: 'center', marginBottom: spacing.lg },
@@ -118,9 +198,13 @@ const styles = StyleSheet.create({
   switchTextActive: { color: colors.ink },
   label: { color: colors.muted, fontSize: 11, fontWeight: '800', letterSpacing: 1, marginBottom: 7, marginTop: spacing.sm },
   input: { backgroundColor: colors.background, borderColor: colors.border, borderWidth: 1, color: colors.text, minHeight: 48, paddingHorizontal: 13, fontSize: 15, borderRadius: radius.sm },
+  multiline: { minHeight: 96, paddingVertical: 12, textAlignVertical: 'top' },
+  chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: spacing.sm },
+  hint: { color: colors.muted, fontSize: 13, lineHeight: 19, marginBottom: spacing.sm },
   error: { color: colors.danger, fontSize: 13, lineHeight: 19, marginTop: spacing.sm, textAlign: 'center' },
   submit: { minHeight: 52, backgroundColor: colors.gold, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 10, marginTop: spacing.md, borderRadius: radius.sm, paddingHorizontal: 12 },
   submitDisabled: { opacity: 0.65 },
   submitText: { color: colors.ink, fontWeight: '900', letterSpacing: 0.6, textAlign: 'center' },
-  footnote: { color: colors.muted, fontSize: 12, textAlign: 'center', marginTop: spacing.md },
-});
+    footnote: { color: colors.muted, fontSize: 12, textAlign: 'center', marginTop: spacing.md },
+  });
+}

@@ -16,7 +16,7 @@ import * as Haptics from 'expo-haptics';
 import Svg, { Circle } from 'react-native-svg';
 import { useTranslation } from 'react-i18next';
 import { nutrition } from '../services/api';
-import { colors, radius, spacing } from '../theme';
+import { radius, spacing, useTheme, useThemedStyles, type ThemeColors } from '../theme';
 import { EmptyState } from '../components/EmptyState';
 import { ScreenSkeleton } from '../components/Skeleton';
 import { apiErrorMessage, formatDate, formatNumber } from '../../i18n';
@@ -50,7 +50,14 @@ function parseAmount(value: string) {
   return Number.isFinite(n) ? n : NaN;
 }
 
+function useScreenTheme() {
+  const { colors } = useTheme();
+  const styles = useThemedStyles(createStyles);
+  return { colors, styles };
+}
+
 function ProgressRing({ current, goal, label }: { current: number; goal: number; label: string }) {
+  const { colors, styles } = useScreenTheme();
   const size = 92;
   const stroke = 8;
   const center = size / 2;
@@ -65,7 +72,7 @@ function ProgressRing({ current, goal, label }: { current: number; goal: number;
           cx={center}
           cy={center}
           r={radiusPx}
-          stroke={colors.gold}
+          stroke={progress >= 1 ? colors.success : colors.gold}
           strokeWidth={stroke}
           fill="none"
           strokeDasharray={`${circ} ${circ}`}
@@ -83,6 +90,7 @@ function ProgressRing({ current, goal, label }: { current: number; goal: number;
 }
 
 function Chip({ label, active, onPress }: { label: string; active: boolean; onPress: () => void }) {
+  const { styles } = useScreenTheme();
   return (
     <Pressable onPress={onPress} style={[styles.chip, active && styles.chipActive]}>
       <Text style={[styles.chipText, active && styles.chipTextActive]}>{label}</Text>
@@ -98,6 +106,7 @@ type OnboardingProps = {
 
 function OnboardingCard({ onSaved, onCancel, currentGoals }: OnboardingProps) {
   const { t } = useTranslation();
+  const { colors, styles } = useScreenTheme();
   const [age, setAge] = useState('');
   const [sex, setSex] = useState<Sex>('male');
   const [weightKg, setWeightKg] = useState('');
@@ -245,6 +254,7 @@ function OnboardingCard({ onSaved, onCancel, currentGoals }: OnboardingProps) {
 
 export function NutritionScreen() {
   const { t } = useTranslation();
+  const { colors, styles } = useScreenTheme();
   const date = localDateString();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -395,10 +405,16 @@ export function NutritionScreen() {
               <ProgressRing current={protein} goal={goals.dailyProtein} label={t('nutrition.protein')} />
               <ProgressRing current={waterMl} goal={goals.dailyWater} label={t('nutrition.water')} />
             </View>
-            <Text style={styles.remain}>{remainingLine(calories, goals.dailyCalories, t('nutrition.unitKcal'), t)}</Text>
-            <Text style={styles.remain}>{remainingLine(protein, goals.dailyProtein, t('nutrition.unitProtein'), t)}</Text>
-            <Text style={styles.remain}>{remainingLine(waterMl, goals.dailyWater, t('nutrition.unitMl'), t)}</Text>
-            <Text style={styles.goalHint}>{goalLabel} · {goals.source === 'manual' ? t('nutrition.manualTargets') : t('nutrition.calculatedTargets')}</Text>
+            <Text style={[styles.remain, calories > goals.dailyCalories && { color: colors.error }]}>{remainingLine(calories, goals.dailyCalories, t('nutrition.unitKcal'), t)}</Text>
+            <Text style={[styles.remain, protein > goals.dailyProtein && { color: colors.error }]}>{remainingLine(protein, goals.dailyProtein, t('nutrition.unitProtein'), t)}</Text>
+            <Text style={[styles.remain, waterMl > goals.dailyWater && { color: colors.error }]}>{remainingLine(waterMl, goals.dailyWater, t('nutrition.unitMl'), t)}</Text>
+            <Text style={styles.goalHint}>
+              {goalLabel} · {goals.source === 'coach'
+                ? t('nutrition.coachTargets', { name: goals.setByCoachName || t('coaches.coachFallback') })
+                : goals.source === 'manual'
+                  ? t('nutrition.manualTargets')
+                  : t('nutrition.calculatedTargets')}
+            </Text>
 
             <View style={styles.card}>
               <Text style={styles.kicker}>{t('nutrition.hydration')}</Text>
@@ -488,7 +504,8 @@ export function NutritionScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+function createStyles(colors: ThemeColors) {
+  return StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.background },
   content: { padding: spacing.lg, paddingBottom: 48 },
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: spacing.lg, paddingTop: spacing.sm },
@@ -540,5 +557,6 @@ const styles = StyleSheet.create({
   mealRow: { backgroundColor: colors.surface, borderColor: colors.border, borderWidth: 1, borderRadius: radius.md, padding: spacing.md, marginBottom: spacing.sm, flexDirection: 'row', alignItems: 'center', gap: 12, minHeight: 44 },
   mealRowText: { flex: 1 },
   mealName: { color: colors.text, fontSize: 16, fontWeight: '800' },
-  mealMeta: { color: colors.muted, fontSize: 12, marginTop: 4 },
-});
+    mealMeta: { color: colors.muted, fontSize: 12, marginTop: 4 },
+  });
+}

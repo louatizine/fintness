@@ -5,7 +5,7 @@ import type { BottomTabNavigationProp } from '@react-navigation/bottom-tabs';
 import { LineChart } from 'react-native-chart-kit';
 import { useTranslation } from 'react-i18next';
 import { exercises as exercisesApi, workouts } from '../services/api';
-import { colors, radius, spacing } from '../theme';
+import { radius, spacing, useTheme, useThemedStyles, withAlpha, type ThemeColors } from '../theme';
 import { EmptyState } from '../components/EmptyState';
 import { ScreenSkeleton } from '../components/Skeleton';
 import { apiErrorMessage, formatNumber } from '../../i18n';
@@ -50,6 +50,8 @@ function chartSeries(progress: ExerciseProgress, t: (key: string) => string) {
 
 export function ProgressScreen() {
   const { t } = useTranslation();
+  const { colors } = useTheme();
+  const styles = useThemedStyles(createStyles);
   const navigation = useNavigation<BottomTabNavigationProp<RootTabs, 'Progress'>>();
   const [library, setLibrary] = useState<Exercise[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -152,7 +154,7 @@ export function ProgressScreen() {
                 backgroundGradientFrom: colors.surface,
                 backgroundGradientTo: colors.surface,
                 decimalPlaces: progress?.type === 'cardio' ? 1 : 0,
-                color: (opacity = 1) => `rgba(201, 167, 91, ${opacity})`,
+                color: (opacity = 1) => withAlpha(colors.gold, opacity),
                 labelColor: () => colors.muted,
                 propsForBackgroundLines: { stroke: colors.border },
                 propsForDots: { r: '4', strokeWidth: '2', stroke: colors.gold },
@@ -169,7 +171,8 @@ export function ProgressScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+function createStyles(colors: ThemeColors) {
+  return StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.background },
   content: { padding: spacing.lg, paddingBottom: 48 },
   eyebrow: { color: colors.accent, fontSize: 12, fontWeight: '800', letterSpacing: 1 },
@@ -186,5 +189,6 @@ const styles = StyleSheet.create({
   ltr: { direction: 'ltr' },
   chart: { marginStart: -8 },
   latest: { color: colors.muted, fontSize: 12, paddingHorizontal: spacing.md, paddingBottom: spacing.md },
-  error: { color: colors.danger, marginTop: spacing.md, textAlign: 'center' },
-});
+    error: { color: colors.danger, marginTop: spacing.md, textAlign: 'center' },
+  });
+}

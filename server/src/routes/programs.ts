@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import { ObjectId } from 'mongodb';
 import { getDb } from '../db.js';
 import { requireAuth } from '../middleware/auth.js';
+import { requireAcceptedCoaching } from '../coachAccess.js';
 import { suggestBodyweightReps } from '../bodyweightSuggestion.js';
 import { EQUIPMENT, PROGRAM_TYPES, type Equipment, type ExerciseKind, type NutritionGoalKind, type ProgramType } from '../types.js';
 
@@ -48,11 +49,12 @@ function isBodyweightExercise(doc: { type?: unknown; equipment?: unknown } | nul
   return isKind(doc.type) && doc.type === 'strength' && (doc.equipment === 'bodyweight' || doc.equipment === 'none');
 }
 
-function programVisible(doc: { createdBy?: string | null; seedKey?: string }, userId: string) {
-  return !doc.createdBy || doc.createdBy === userId;
+function programVisible(doc: { createdBy?: string | null; assignedToUserId?: string | null; createdByCoachId?: string | null }, userId: string) {
+  if (!doc.createdBy || doc.createdBy === userId || doc.assignedToUserId === userId) return true;
+  return Boolean(doc.createdByCoachId) && !doc.assignedToUserId;
 }
 
-function publicProgram(doc: Record<string, unknown> & { _id: ObjectId }, names?: Map<string, string>) {
+function publicProgram(doc: Record<string, unknown> & { _id: ObjectId }, names?: Map<string, string>, coachNames?: Map<string, string>) {
   const createdBy = (doc.createdBy as string | null | undefined) ?? null;
   const days = Array.isArray(doc.days) ? doc.days.map((day) => {
     const raw = day as { dayLabel?: string; exercises?: unknown[] };
@@ -79,6 +81,9 @@ function publicProgram(doc: Record<string, unknown> & { _id: ObjectId }, names?:
     daysPerWeek: Number(doc.daysPerWeek) || days.length,
     createdBy,
     isCustom: createdBy !== null,
+    assignedToUserId: typeof doc.assignedToUserId === 'string' ? doc.assignedToUserId : null,
+    createdByCoachId: typeof doc.createdByCoachId === 'string' ? doc.createdByCoachId : null,
+    assignedByCoachName: typeof doc.createdByCoachId === 'string' ? (coachNames?.get(doc.createdByCoachId) ?? null) : null,
     days,
   };
 }
@@ -132,6 +137,17 @@ function parseDays(raw: unknown): { error?: string; days?: { dayLabel: string; e
   return { days };
 }
 
+async function loadCoachNames(coachIds: string[]) {
+  const objectIds = [...new Set(coachIds)].map(asObjectId).filter((id): id is ObjectId => Boolean(id));
+  if (objectIds.length === 0) return new Map<string, string>();
+  const docs = await getDb().collection('users').find({ _id: { $in: objectIds } }).toArray();
+  return new Map(docs.map((doc) => {
+    const profile = doc.coachProfile as { displayName?: string } | undefined;
+    const name = profile?.displayName?.trim() || (typeof doc.email === 'string' ? doc.email.split('@')[0] : 'Coach');
+    return [doc._id.toHexString(), name];
+  }));
+}
+
 async function hydrateNames(programs: Array<Record<string, unknown> & { _id: ObjectId }>) {
   const ids = programs.flatMap((program) => {
     const days = Array.isArray(program.days) ? program.days : [];
@@ -140,8 +156,9 @@ async function hydrateNames(programs: Array<Record<string, unknown> & { _id: Obj
       return exercises.map((item) => item.exerciseId).filter((id): id is string => Boolean(id));
     });
   });
-  const names = await loadExerciseNames([...new Set(ids)]);
-  return programs.map((program) => publicProgram(program, names));
+  const coachIds = programs.map((program) => typeof program.createdByCoachId === 'string' ? program.createdByCoachId : '').filter(Boolean);
+  const [names, coachNames] = await Promise.all([loadExerciseNames([...new Set(ids)]), loadCoachNames(coachIds)]);
+  return programs.map((program) => publicProgram(program, names, coachNames));
 }
 
 async function advanceActiveDay(userId: string, completeSession: boolean) {
@@ -170,7 +187,7 @@ programsRouter.get('/', async (req: Request, res: Response) => {
   try {
     const userId = req.user!.userId;
     const docs = await getDb().collection('programs').find({
-      $or: [{ createdBy: null }, { createdBy: userId }],
+      $or: [{ createdBy: null }, { createdBy: userId }, { assignedToUserId: userId }],
     }).toArray();
     docs.sort((a, b) => {
       const customRank = (Number(Boolean(a.createdBy)) - Number(Boolean(b.createdBy)));
@@ -196,6 +213,30 @@ programsRouter.post('/', async (req: Request, res: Response) => {
       return;
     }
     const userId = req.user!.userId;
+    const assignedToUserId = typeof req.body?.assignedToUserId === 'string' ? req.body.assignedToUserId.trim() : '';
+    const creatorId = asObjectId(userId);
+    const creator = creatorId ? await getDb().collection('users').findOne({ _id: creatorId }) : null;
+    let createdByCoachId: string | null = creator?.role === 'coach' ? userId : null;
+    if (assignedToUserId) {
+      const athleteId = asObjectId(assignedToUserId);
+      if (!creatorId || !athleteId) {
+        res.status(400).json({ error: 'assignedToUserId must be a valid user id' });
+        return;
+      }
+      if (!creator || creator.role !== 'coach') {
+        res.status(403).json({ error: 'Only coaches can assign a program to another athlete' });
+        return;
+      }
+      if (assignedToUserId === userId) {
+        res.status(400).json({ error: 'Assign the program to an accepted client, not yourself' });
+        return;
+      }
+      const accepted = await requireAcceptedCoaching(userId, assignedToUserId);
+      if (!accepted) {
+        res.status(403).json({ error: 'You can only assign a plan to an athlete who accepted your coaching request' });
+        return;
+      }
+    }
     const exerciseIds = [...new Set(parsed.days.flatMap((day) => day.exercises.map((item) => item.exerciseId)))];
     const objectIds = exerciseIds.map(asObjectId).filter((id): id is ObjectId => Boolean(id));
     const visible = await getDb().collection('exercises').find({
@@ -209,18 +250,35 @@ programsRouter.post('/', async (req: Request, res: Response) => {
     }
     const type = isProgramType(req.body?.type) ? req.body.type : 'custom';
     const description = typeof req.body?.description === 'string' ? req.body.description.trim() : '';
+    const now = new Date().toISOString();
     const data = {
       name,
       description,
       type,
       daysPerWeek: asPositiveInt(req.body?.daysPerWeek) ?? parsed.days.length,
       createdBy: userId,
+      assignedToUserId: assignedToUserId || null,
+      createdByCoachId,
       days: parsed.days,
-      createdAt: new Date().toISOString(),
+      createdAt: now,
     };
     const result = await getDb().collection('programs').insertOne(data);
+    if (assignedToUserId) {
+      await getDb().collection('userPrograms').updateMany(
+        { userId: assignedToUserId, active: true },
+        { $set: { active: false, endedAt: now } }
+      );
+      await getDb().collection('userPrograms').insertOne({
+        userId: assignedToUserId,
+        programId: result.insertedId.toHexString(),
+        startedAt: now,
+        active: true,
+        currentDayIndex: 0,
+      });
+    }
     const names = new Map(visible.map((doc) => [doc._id.toHexString(), String(doc.name ?? '')]));
-    res.status(201).json(publicProgram({ ...data, _id: result.insertedId }, names));
+    const coachNames = createdByCoachId ? await loadCoachNames([createdByCoachId]) : undefined;
+    res.status(201).json(publicProgram({ ...data, _id: result.insertedId }, names, coachNames));
   } catch (err) {
     console.error('Create program error:', err);
     res.status(500).json({ error: 'Internal server error' });
@@ -302,9 +360,13 @@ programsRouter.get('/active', async (req: Request, res: Response) => {
         currentDayIndex: dayIndex,
         active: true,
       },
-      program: publicProgram(program as Record<string, unknown> & { _id: ObjectId }, await loadExerciseNames(
-        days.flatMap((day) => ((day as { exercises?: { exerciseId?: string }[] }).exercises ?? []).map((item) => String(item.exerciseId ?? '')).filter(Boolean))
-      )),
+      program: publicProgram(
+        program as Record<string, unknown> & { _id: ObjectId },
+        await loadExerciseNames(
+          days.flatMap((day) => ((day as { exercises?: { exerciseId?: string }[] }).exercises ?? []).map((item) => String(item.exerciseId ?? '')).filter(Boolean))
+        ),
+        await loadCoachNames(typeof program.createdByCoachId === 'string' ? [program.createdByCoachId] : [])
+      ),
       today: {
         dayIndex,
         dayLabel: typeof todayDay?.dayLabel === 'string' ? todayDay.dayLabel : 'Day',
@@ -376,6 +438,85 @@ programsRouter.post('/complete-day', async (req: Request, res: Response) => {
     res.json({ ok: true, currentDayIndex: result.nextDayIndex });
   } catch (err) {
     console.error('Complete program day error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+programsRouter.patch('/:id', async (req: Request, res: Response) => {
+  try {
+    const id = asObjectId(req.params.id);
+    if (!id) {
+      res.status(400).json({ error: 'Invalid program id' });
+      return;
+    }
+    const userId = req.user!.userId;
+    const existing = await getDb().collection('programs').findOne({ _id: id });
+    if (!existing) {
+      res.status(404).json({ error: 'Program not found' });
+      return;
+    }
+    if (existing.createdByCoachId !== userId && existing.createdBy !== userId) {
+      res.status(403).json({ error: 'You can only edit programs you created' });
+      return;
+    }
+    const assignedToUserId = typeof existing.assignedToUserId === 'string' ? existing.assignedToUserId : '';
+    if (existing.createdByCoachId === userId && assignedToUserId && assignedToUserId !== userId) {
+      const accepted = await requireAcceptedCoaching(userId, assignedToUserId);
+      if (!accepted) {
+        res.status(403).json({ error: 'You can only edit a client program while the coaching relationship is accepted' });
+        return;
+      }
+    }
+    const patch: Record<string, unknown> = { updatedAt: new Date().toISOString() };
+    if (typeof req.body?.name === 'string') {
+      const name = req.body.name.trim();
+      if (!name) {
+        res.status(400).json({ error: 'name cannot be empty' });
+        return;
+      }
+      patch.name = name;
+    }
+    if (typeof req.body?.description === 'string') patch.description = req.body.description.trim();
+    if (req.body?.type !== undefined) {
+      if (!isProgramType(req.body.type)) {
+        res.status(400).json({ error: 'Invalid program type' });
+        return;
+      }
+      patch.type = req.body.type;
+    }
+    if (req.body?.days !== undefined) {
+      const parsed = parseDays(req.body.days);
+      if (parsed.error || !parsed.days) {
+        res.status(400).json({ error: parsed.error ?? 'Invalid days' });
+        return;
+      }
+      const exerciseIds = [...new Set(parsed.days.flatMap((day) => day.exercises.map((item) => item.exerciseId)))];
+      const objectIds = exerciseIds.map(asObjectId).filter((oid): oid is ObjectId => Boolean(oid));
+      const visible = await getDb().collection('exercises').find({
+        _id: { $in: objectIds },
+        archived: { $ne: true },
+        $or: [{ seedKey: { $exists: true } }, { createdBy: userId }, { userId }],
+      }).toArray();
+      if (visible.length !== exerciseIds.length) {
+        res.status(400).json({ error: 'One or more exercises are not in your library' });
+        return;
+      }
+      patch.days = parsed.days;
+      patch.daysPerWeek = asPositiveInt(req.body?.daysPerWeek) ?? parsed.days.length;
+    } else if (req.body?.daysPerWeek !== undefined) {
+      const daysPerWeek = asPositiveInt(req.body.daysPerWeek);
+      if (!daysPerWeek) {
+        res.status(400).json({ error: 'daysPerWeek must be a positive integer' });
+        return;
+      }
+      patch.daysPerWeek = daysPerWeek;
+    }
+    await getDb().collection('programs').updateOne({ _id: id }, { $set: patch });
+    const updated = await getDb().collection('programs').findOne({ _id: id });
+    const [hydrated] = await hydrateNames([updated as Record<string, unknown> & { _id: ObjectId }]);
+    res.json(hydrated);
+  } catch (err) {
+    console.error('Patch program error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
 });

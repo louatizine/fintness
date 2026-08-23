@@ -4,7 +4,7 @@ import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import type { BottomTabNavigationProp } from '@react-navigation/bottom-tabs';
 import { useTranslation } from 'react-i18next';
 import { workouts } from '../services/api';
-import { colors, radius, spacing } from '../theme';
+import { radius, spacing, useThemedStyles, type ThemeColors } from '../theme';
 import { EmptyState } from '../components/EmptyState';
 import { ScreenSkeleton } from '../components/Skeleton';
 import { apiErrorMessage, formatDate, formatNumber } from '../../i18n';
@@ -63,6 +63,7 @@ function cardioLine(session: WorkoutSession, t: (key: string, opts?: Record<stri
 
 export function HistoryScreen() {
   const { t } = useTranslation();
+  const styles = useThemedStyles(createStyles);
   const navigation = useNavigation<BottomTabNavigationProp<RootTabs, 'History'>>();
   const [sessions, setSessions] = useState<WorkoutSession[]>([]);
   const [summary, setSummary] = useState<WorkoutCalorieSummary | null>(null);
@@ -143,7 +144,8 @@ export function HistoryScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+function createStyles(colors: ThemeColors) {
+  return StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.background },
   content: { padding: spacing.lg, paddingBottom: 48 },
   eyebrow: { color: colors.accent, fontSize: 12, fontWeight: '800', letterSpacing: 1 },
@@ -159,5 +161,6 @@ const styles = StyleSheet.create({
   volume: { color: colors.muted, fontSize: 12, marginTop: 4 },
   badges: { gap: 6, alignItems: 'flex-end' },
   badge: { color: colors.ink, backgroundColor: colors.gold, fontSize: 9, fontWeight: '900', letterSpacing: 0.8, paddingHorizontal: 8, paddingVertical: 4, overflow: 'hidden' },
-  error: { color: colors.danger, marginTop: spacing.md, textAlign: 'center' },
-});
+    error: { color: colors.danger, marginTop: spacing.md, textAlign: 'center' },
+  });
+}

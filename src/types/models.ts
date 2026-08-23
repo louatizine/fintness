@@ -70,6 +70,9 @@ export type Program = {
   daysPerWeek: number;
   createdBy: string | null;
   isCustom: boolean;
+  assignedToUserId?: string | null;
+  createdByCoachId?: string | null;
+  assignedByCoachName?: string | null;
   days: ProgramDay[];
 };
 
@@ -159,12 +162,141 @@ export type ExerciseProgress =
   | { type: 'strength'; points: StrengthProgressPoint[] }
   | { type: 'cardio'; points: CardioProgressPoint[] };
 
+export type UserRole = 'athlete' | 'coach';
+export type ContactPreference = 'app' | 'email' | 'phone';
+export const COACH_SPECIALTIES = [
+  'strength',
+  'hypertrophy',
+  'powerlifting',
+  'olympic',
+  'calisthenics',
+  'cardio',
+  'mobility',
+  'nutrition',
+  'sports',
+  'rehab',
+] as const;
+export type CoachSpecialty = (typeof COACH_SPECIALTIES)[number];
+export const VIDEO_REPORT_REASONS = ['spam', 'inappropriate', 'misleading', 'other'] as const;
+export type VideoReportReason = (typeof VIDEO_REPORT_REASONS)[number];
+
+export type CoachProfile = {
+  displayName: string;
+  bio: string;
+  specialties: string[];
+  certifications: string;
+  contactPreference: ContactPreference;
+  email?: string;
+  phone?: string;
+};
+
 export type UserProfile = {
   id: string;
   email: string;
   weightUnit: WeightUnit;
   weightKg: number | null;
   createdAt: string;
+  role: UserRole;
+  coachProfile: CoachProfile | null;
+};
+
+export type PublicCoach = {
+  id: string;
+  displayName: string;
+  bio: string;
+  specialties: string[];
+  certifications: string;
+  uniqueViews: number;
+  videoCount: number;
+};
+
+export type CoachVideo = {
+  id: string;
+  coachId: string;
+  title: string;
+  description: string;
+  videoUrl: string;
+  thumbnailUrl: string | null;
+  youtubeId: string | null;
+  kind: 'youtube' | 'file';
+  exerciseTag: string | null;
+  viewCount: number;
+  uniqueViews: number;
+  createdAt: string;
+};
+
+export type CoachDetail = PublicCoach & {
+  videos: CoachVideo[];
+  programs: Program[];
+  myRequest: { id: string; status: string; message: string } | null;
+};
+
+export type CoachListResponse = {
+  page: number;
+  limit: number;
+  total: number;
+  coaches: PublicCoach[];
+};
+
+export type CoachRequest = {
+  id: string;
+  athleteId: string;
+  coachId: string;
+  message: string;
+  status: 'pending' | 'accepted' | 'declined' | 'revoked';
+  createdAt: string;
+  coachName: string;
+  athleteLabel: string;
+};
+
+export type CoachContactInfo = {
+  method: ContactPreference;
+  email: string | null;
+  phone: string | null;
+};
+
+export type CoachClientSummary = {
+  athleteId: string;
+  name: string;
+  email: string;
+  coachingStartedAt: string;
+  programName: string | null;
+  lastWorkoutAt: string | null;
+  plannedSessions: number;
+  completedSessions: number;
+};
+
+export type CoachClientWorkout = {
+  id: string;
+  startedAt: string;
+  dayLabel: string;
+  totalVolume: number;
+  exerciseNames: string[];
+};
+
+export type CoachClientNutritionDay = {
+  date: string;
+  calories: number;
+  protein: number;
+  waterMl: number;
+  mealCount: number;
+};
+
+export type CoachClientDetail = {
+  athleteId: string;
+  name: string;
+  email: string;
+  weightKg: number | null;
+  coachingStartedAt: string;
+  program: Program | null;
+  nutritionGoals: NutritionGoals | null;
+  recentWorkouts: CoachClientWorkout[];
+  recentNutritionLogs: CoachClientNutritionDay[];
+  adherence: {
+    plannedSessions: number;
+    completedSessions: number;
+    lastWorkoutAt: string | null;
+  };
 };
 
 export type CardioPeriodTotal = {
@@ -187,7 +319,7 @@ export type WorkoutSummary = {
 };
 
 export type NutritionGoalKind = 'cut' | 'maintain' | 'bulk';
-export type NutritionGoalSource = 'auto' | 'manual';
+export type NutritionGoalSource = 'auto' | 'manual' | 'coach';
 export type ActivityLevel = 'sedentary' | 'light' | 'moderate' | 'active' | 'very_active';
 export type Sex = 'male' | 'female';
 
@@ -197,6 +329,8 @@ export type NutritionGoals = {
   dailyWater: number;
   goal: NutritionGoalKind;
   source: NutritionGoalSource;
+  setByCoachId?: string | null;
+  setByCoachName?: string | null;
   updatedAt: string;
 };
 

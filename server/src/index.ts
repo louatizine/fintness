@@ -8,6 +8,8 @@ import { workoutsRouter } from './routes/workouts.js';
 import { nutritionRouter } from './routes/nutrition.js';
 import { programsRouter } from './routes/programs.js';
 import { usersRouter } from './routes/users.js';
+import { coachesRouter } from './routes/coaches.js';
+import { coachRequestsRouter } from './routes/coachRequests.js';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -23,6 +25,8 @@ app.use('/workouts', workoutsRouter);
 app.use('/nutrition', nutritionRouter);
 app.use('/programs', programsRouter);
 app.use('/users', usersRouter);
+app.use('/coaches', coachesRouter);
+app.use('/coach-requests', coachRequestsRouter);
 
 connectDb().then(() => {
   app.listen(PORT, () => console.log(`Server running on port ${PORT}`));

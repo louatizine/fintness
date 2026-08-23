@@ -5,11 +5,18 @@ import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
 import { programs as programsApi } from '../services/api';
 import { ExerciseHowToModal, ExerciseThumb, HowToButton } from '../components/ExerciseHowTo';
-import { colors, radius, spacing } from '../theme';
+import { radius, spacing, useTheme, useThemedStyles, type ThemeColors } from '../theme';
 import { apiErrorMessage } from '../../i18n';
 import type { Exercise, Program, ProgramDay, ProgramExercise, ProgramType } from '../types/models';
 
+function useScreenTheme() {
+  const { colors } = useTheme();
+  const styles = useThemedStyles(createStyles);
+  return { colors, styles };
+}
+
 function Chip({ label, active, onPress }: { label: string; active: boolean; onPress: () => void }) {
+  const { styles } = useScreenTheme();
   return (
     <Pressable onPress={onPress} style={[styles.chip, active && styles.chipActive]}>
       <Text style={[styles.chipText, active && styles.chipTextActive]}>{label}</Text>
@@ -44,6 +51,7 @@ export function ProgramPicker({
   onChanged: () => void;
 }) {
   const { t } = useTranslation();
+  const { colors, styles } = useScreenTheme();
   const [list, setList] = useState<Program[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -238,7 +246,7 @@ export function ProgramPicker({
         ) : null}
         {error ? <Text style={styles.error}>{error}</Text> : null}
         <Pressable onPress={() => void saveCustom()} disabled={saving} style={[styles.primary, saving && styles.disabled]}>
-          {saving ? <ActivityIndicator color={colors.accentDark} /> : <Text style={styles.primaryText} numberOfLines={2}>{t('programs.saveAndAssign')}</Text>}
+          {saving ? <ActivityIndicator color={colors.ink} /> : <Text style={styles.primaryText} numberOfLines={2}>{t('programs.saveAndAssign')}</Text>}
         </Pressable>
         <Pressable onPress={() => setBuilding(false)} style={styles.textButton}><Text style={styles.textButtonLabel}>{t('programs.backToPrograms')}</Text></Pressable>
         <ExerciseHowToModal exercise={howTo} onClose={() => setHowTo(null)} />
@@ -255,7 +263,7 @@ export function ProgramPicker({
         const active = program.id === activeProgramId;
         return (
           <View key={program.id} style={styles.card}>
-            <Text style={styles.kicker}>{typeLabel(program.type, t)}{program.isCustom ? ` · ${t('programs.yours')}` : ''}</Text>
+            <Text style={styles.kicker}>{typeLabel(program.type, t)}{program.assignedByCoachName ? ` · ${t('programs.assignedByCoach', { name: program.assignedByCoachName })}` : program.isCustom ? ` · ${t('programs.yours')}` : ''}</Text>
             <Text style={styles.cardTitle}>{program.name}</Text>
             <Text style={styles.help}>{program.description}</Text>
             <Text style={styles.slotMeta}>{t('programs.daysPreview', { n: program.daysPerWeek, preview: dayPreview(program) })}</Text>
@@ -284,7 +292,8 @@ export function ProgramPicker({
   );
 }
 
-const styles = StyleSheet.create({
+function createStyles(colors: ThemeColors) {
+  return StyleSheet.create({
   centered: { alignItems: 'center', justifyContent: 'center', padding: spacing.lg },
   kicker: { color: colors.gold, fontSize: 11, fontWeight: '800', letterSpacing: 1.5 },
   title: { color: colors.text, fontSize: 26, fontWeight: '800', marginTop: 6, marginBottom: spacing.sm },
@@ -308,12 +317,13 @@ const styles = StyleSheet.create({
   libraryRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.surface, borderColor: colors.border, borderWidth: 1, borderRadius: radius.md, paddingVertical: spacing.sm, paddingStart: spacing.sm, paddingEnd: spacing.xs, marginTop: spacing.sm, gap: 8 },
   libraryMain: { flex: 1, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 8, minHeight: 44 },
   primary: { marginTop: spacing.md, backgroundColor: colors.accent, borderRadius: radius.sm, minHeight: 48, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 12 },
-  primaryText: { color: colors.accentDark, fontWeight: '900', textAlign: 'center' },
+  primaryText: { color: colors.ink, fontWeight: '900', textAlign: 'center' },
   secondary: { marginTop: spacing.md, borderColor: colors.gold, borderWidth: 1, borderRadius: radius.sm, minHeight: 48, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 6, paddingHorizontal: 12 },
   secondaryText: { color: colors.gold, fontWeight: '800' },
   textButton: { alignItems: 'center', marginTop: spacing.sm, minHeight: 44, justifyContent: 'center' },
   textButtonLabel: { color: colors.muted, fontWeight: '700', textAlign: 'center' },
   error: { color: colors.danger, fontSize: 13, marginTop: spacing.sm, textAlign: 'center' },
   disabled: { opacity: 0.65 },
-  iconHit: { minWidth: 44, minHeight: 44, alignItems: 'center', justifyContent: 'center' },
-});
+    iconHit: { minWidth: 44, minHeight: 44, alignItems: 'center', justifyContent: 'center' },
+  });
+}

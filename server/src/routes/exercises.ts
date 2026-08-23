@@ -90,14 +90,27 @@ exercisesRouter.get('/', async (req: Request, res: Response) => {
     const userId = req.user!.userId;
     const db = getDb();
     const [docs, prefs, goal] = await Promise.all([
-      db.collection('exercises').find({
-        archived: { $ne: true },
-        $or: [
-          { seedKey: { $exists: true } },
-          { createdBy: userId },
-          { userId },
-        ],
-      }).toArray(),
+      (async () => {
+        const assigned = await db.collection('programs').find({ assignedToUserId: userId }).toArray();
+        const extraIds = assigned.flatMap((program) => {
+          const days = Array.isArray(program.days) ? program.days : [];
+          return days.flatMap((day) => {
+            const exercises = Array.isArray((day as { exercises?: { exerciseId?: string }[] }).exercises)
+              ? (day as { exercises: { exerciseId?: string }[] }).exercises
+              : [];
+            return exercises.map((item) => asObjectId(String(item.exerciseId ?? ''))).filter((id): id is ObjectId => Boolean(id));
+          });
+        });
+        return db.collection('exercises').find({
+          archived: { $ne: true },
+          $or: [
+            { seedKey: { $exists: true } },
+            { createdBy: userId },
+            { userId },
+            ...(extraIds.length ? [{ _id: { $in: extraIds } }] : []),
+          ],
+        }).toArray();
+      })(),
       db.collection('exercisePreferences').find({ userId }).toArray(),
       resolveGoal(userId),
     ]);

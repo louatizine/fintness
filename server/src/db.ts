@@ -23,7 +23,14 @@ export async function connectDb(): Promise<Db> {
   await db.collection('setLogs').createIndex({ sessionId: 1 });
   await db.collection('programs').createIndex({ seedKey: 1 }, { unique: true, sparse: true });
   await db.collection('programs').createIndex({ createdBy: 1 });
+  await db.collection('programs').createIndex({ assignedToUserId: 1 });
+  await db.collection('programs').createIndex({ createdByCoachId: 1 });
   await db.collection('userPrograms').createIndex({ userId: 1, active: 1 });
+  await db.collection('users').createIndex({ role: 1 });
+  await db.collection('coachRequests').createIndex({ coachId: 1, createdAt: -1 });
+  await db.collection('coachRequests').createIndex({ athleteId: 1, coachId: 1 });
+  await db.collection('coachVideos').createIndex({ coachId: 1, createdAt: -1 });
+  await db.collection('videoReports').createIndex({ videoId: 1, reporterId: 1 }, { unique: true });
   const idBySeed = await seedBuiltinExercises(db);
   await seedBuiltinPrograms(db, idBySeed);
   console.log('Connected to MongoDB');
