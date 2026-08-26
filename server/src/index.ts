@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
+import path from 'node:path';
 import { connectDb } from './db.js';
 import { authRouter } from './routes/auth.js';
 import { exercisesRouter } from './routes/exercises.js';
@@ -15,7 +16,8 @@ const app = express();
 const PORT = process.env.PORT || 3001;
 
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '512kb' }));
+app.use('/uploads', express.static(path.join(process.cwd(), 'uploads')));
 
 app.get('/health', (_req, res) => { res.json({ status: 'ok' }); });
 

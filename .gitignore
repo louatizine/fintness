@@ -8,6 +8,7 @@ node_modules/
 dist/
 web-build/
 expo-env.d.ts
+server/uploads/
 
 # Native
 .kotlin/
@@ -33,6 +34,13 @@ yarn-error.*
 # local env files
 .env
 .env*.local
+
+# Firebase / FCM (upload via eas credentials — do not commit keys)
+google-services.json
+GoogleService-Info.plist
+*-firebase-adminsdk-*.json
+fcm-service-account.json
+
 
 # typescript
 *.tsbuildinfo

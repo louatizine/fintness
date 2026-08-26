@@ -12,7 +12,7 @@ import type { UserProfile } from '../../types/models';
 import type { CoachesStackParamList } from '../../navigation';
 
 type Action = {
-  screen: 'CoachClients' | 'CoachInbox' | 'CoachVideoUpload' | 'BecomeCoach' | 'CoachDirectory';
+  screen: 'CoachClients' | 'CoachInbox' | 'CoachVideoUpload' | 'CoachNutritionPlanCreate' | 'BecomeCoach' | 'CoachDirectory';
   icon: keyof typeof Ionicons.glyphMap;
   title: string;
   help: string;
@@ -52,6 +52,7 @@ export function CoachHomeScreen() {
     { screen: 'CoachClients', icon: 'people-circle-outline', title: t('coaches.myClients'), help: t('coaches.spaceClientsHelp') },
     { screen: 'CoachInbox', icon: 'mail-outline', title: t('coaches.inbox'), help: t('coaches.spaceInboxHelp') },
     { screen: 'CoachVideoUpload', icon: 'videocam-outline', title: t('coaches.uploadVideo'), help: t('coaches.spaceUploadHelp') },
+    { screen: 'CoachNutritionPlanCreate', icon: 'restaurant-outline', title: t('coaches.publicNutritionPlan'), help: t('coaches.spaceNutritionPlanHelp') },
     { screen: 'BecomeCoach', icon: 'person-outline', title: t('coaches.editProfile'), help: t('coaches.spaceProfileHelp') },
     { screen: 'CoachDirectory', icon: 'people-outline', title: t('coaches.browseDirectory'), help: t('coaches.spaceDirectoryHelp') },
   ];

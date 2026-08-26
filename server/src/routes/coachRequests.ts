@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import { ObjectId } from 'mongodb';
 import { getDb } from '../db.js';
 import { requireAuth, requireCoach } from '../middleware/auth.js';
+import { notifyUserPush } from '../push.js';
 
 export const coachRequestsRouter = Router();
 coachRequestsRouter.use(requireAuth);
@@ -171,6 +172,19 @@ coachRequestsRouter.patch('/:id', requireCoach, async (req: Request, res: Respon
       { $set: { status, respondedAt: new Date().toISOString() } }
     );
     const updated = await getDb().collection('coachRequests').findOne({ _id: id });
+    const athleteId = typeof existing.athleteId === 'string' ? existing.athleteId : '';
+    if (athleteId) {
+      notifyUserPush({
+        userId: athleteId,
+        pref: 'coachRequestResponse',
+        title: status === 'accepted' ? 'Coach accepted' : 'Coach declined',
+        body:
+          status === 'accepted'
+            ? 'Your coach accepted your request'
+            : 'Your coaching request was declined',
+        data: { type: 'coach_request_response', status, requestId: id.toHexString() },
+      });
+    }
     const [hydrated] = await hydrateRequests([updated as Record<string, unknown> & { _id: ObjectId }]);
     res.json(hydrated);
   } catch (err) {

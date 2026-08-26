@@ -3,6 +3,11 @@ import { ObjectId } from 'mongodb';
 import { getDb } from '../db.js';
 import { requireAuth } from '../middleware/auth.js';
 import { parseCoachProfile } from '../coachProfile.js';
+import {
+  mergeNotificationPrefsPatch,
+  normalizeNotificationPrefs,
+  type NotificationPrefs,
+} from '../notificationPrefs.js';
 
 export const usersRouter = Router();
 usersRouter.use(requireAuth);
@@ -21,6 +26,13 @@ function asFiniteNumber(value: unknown): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+function isExpoPushToken(token: string): boolean {
+  return (
+    token.startsWith('ExponentPushToken[') ||
+    token.startsWith('ExpoPushToken[')
+  );
+}
+
 function publicProfile(doc: {
   _id: ObjectId;
   email?: string;
@@ -37,6 +49,7 @@ function publicProfile(doc: {
     email?: string;
     phone?: string;
   };
+  notificationPrefs?: unknown;
 }) {
   const role = doc.role === 'coach' ? 'coach' as const : 'athlete' as const;
   const raw = doc.coachProfile;
@@ -58,6 +71,7 @@ function publicProfile(doc: {
         phone: raw.phone ?? '',
       }
       : null,
+    notificationPrefs: normalizeNotificationPrefs(doc.notificationPrefs) as NotificationPrefs,
   };
 }
 
@@ -83,14 +97,47 @@ usersRouter.get('/me', async (req: Request, res: Response) => {
 usersRouter.patch('/me', async (req: Request, res: Response) => {
   try {
     const id = asObjectId(req.user!.userId);
-    const weightKg = asFiniteNumber(req.body?.weightKg);
-    if (!id || weightKg === null || weightKg < 30 || weightKg > 400) {
-      res.status(400).json({ error: 'weightKg must be a number between 30 and 400' });
+    if (!id) {
+      res.status(400).json({ error: 'Invalid user id' });
       return;
     }
+
+    const body = req.body ?? {};
+    const hasWeight = body.weightKg !== undefined && body.weightKg !== null && body.weightKg !== '';
+    const hasPrefs = body.notificationPrefs !== undefined;
+    if (!hasWeight && !hasPrefs) {
+      res.status(400).json({ error: 'Provide weightKg and/or notificationPrefs' });
+      return;
+    }
+
+    const $set: Record<string, unknown> = { updatedAt: new Date().toISOString() };
+
+    if (hasWeight) {
+      const weightKg = asFiniteNumber(body.weightKg);
+      if (weightKg === null || weightKg < 30 || weightKg > 400) {
+        res.status(400).json({ error: 'weightKg must be a number between 30 and 400' });
+        return;
+      }
+      $set.weightKg = weightKg;
+    }
+
+    if (hasPrefs) {
+      const existing = await getDb().collection('users').findOne({ _id: id }, { projection: { notificationPrefs: 1 } });
+      if (!existing) {
+        res.status(404).json({ error: 'User not found' });
+        return;
+      }
+      const merged = mergeNotificationPrefsPatch(existing.notificationPrefs, body.notificationPrefs);
+      if (!merged) {
+        res.status(400).json({ error: 'Invalid notificationPrefs' });
+        return;
+      }
+      $set.notificationPrefs = merged;
+    }
+
     const result = await getDb().collection('users').findOneAndUpdate(
       { _id: id },
-      { $set: { weightKg, updatedAt: new Date().toISOString() } },
+      { $set },
       { returnDocument: 'after' }
     );
     if (!result) {
@@ -100,6 +147,58 @@ usersRouter.patch('/me', async (req: Request, res: Response) => {
     res.json(publicProfile(result as typeof result & { _id: ObjectId }));
   } catch (err) {
     console.error('Update profile error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+usersRouter.post('/me/push-token', async (req: Request, res: Response) => {
+  try {
+    const id = asObjectId(req.user!.userId);
+    const token = typeof req.body?.token === 'string' ? req.body.token.trim() : '';
+    if (!id) {
+      res.status(400).json({ error: 'Invalid user id' });
+      return;
+    }
+    if (!token || !isExpoPushToken(token)) {
+      res.status(400).json({ error: 'Invalid Expo push token' });
+      return;
+    }
+    await getDb().collection('users').updateOne(
+      { _id: id },
+      {
+        $addToSet: { expoPushTokens: token },
+        $set: { updatedAt: new Date().toISOString() },
+      }
+    );
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Register push token error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+usersRouter.delete('/me/push-token', async (req: Request, res: Response) => {
+  try {
+    const id = asObjectId(req.user!.userId);
+    const token = typeof req.body?.token === 'string' ? req.body.token.trim() : '';
+    if (!id) {
+      res.status(400).json({ error: 'Invalid user id' });
+      return;
+    }
+    if (!token) {
+      res.status(400).json({ error: 'token is required' });
+      return;
+    }
+    await getDb().collection('users').updateOne(
+      { _id: id },
+      {
+        $pull: { expoPushTokens: token },
+        $set: { updatedAt: new Date().toISOString() },
+      } as object
+    );
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Unregister push token error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
 });

@@ -5,6 +5,7 @@ import { requireAuth } from '../middleware/auth.js';
 import { requireAcceptedCoaching } from '../coachAccess.js';
 import { suggestBodyweightReps } from '../bodyweightSuggestion.js';
 import { EQUIPMENT, PROGRAM_TYPES, type Equipment, type ExerciseKind, type NutritionGoalKind, type ProgramType } from '../types.js';
+import { notifyUserPush } from '../push.js';
 
 export const programsRouter = Router();
 programsRouter.use(requireAuth);
@@ -275,6 +276,13 @@ programsRouter.post('/', async (req: Request, res: Response) => {
         active: true,
         currentDayIndex: 0,
       });
+      notifyUserPush({
+        userId: assignedToUserId,
+        pref: 'planAssigned',
+        title: 'Training plan updated',
+        body: 'Your coach updated your training plan',
+        data: { type: 'plan_assigned', kind: 'training', programId: result.insertedId.toHexString() },
+      });
     }
     const names = new Map(visible.map((doc) => [doc._id.toHexString(), String(doc.name ?? '')]));
     const coachNames = createdByCoachId ? await loadCoachNames([createdByCoachId]) : undefined;
@@ -513,6 +521,15 @@ programsRouter.patch('/:id', async (req: Request, res: Response) => {
     }
     await getDb().collection('programs').updateOne({ _id: id }, { $set: patch });
     const updated = await getDb().collection('programs').findOne({ _id: id });
+    if (assignedToUserId && assignedToUserId !== userId) {
+      notifyUserPush({
+        userId: assignedToUserId,
+        pref: 'planAssigned',
+        title: 'Training plan updated',
+        body: 'Your coach updated your training plan',
+        data: { type: 'plan_assigned', kind: 'training', programId: id.toHexString() },
+      });
+    }
     const [hydrated] = await hydrateNames([updated as Record<string, unknown> & { _id: ObjectId }]);
     res.json(hydrated);
   } catch (err) {

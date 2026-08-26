@@ -19,12 +19,15 @@ import type {
   NutritionGoalKind,
   NutritionGoals,
   NutritionMeal,
+  NutritionPlan,
+  NutritionPlanInput,
   NutritionSuggestion,
   Program,
   ProgramDay,
   ProgramType,
   SetLog,
   Sex,
+  NotificationPrefs,
   UserProfile,
   UserProgram,
   UserRole,
@@ -66,6 +69,18 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+async function requestForm<T>(path: string, form: FormData): Promise<T> {
+  const headers: Record<string, string> = {};
+  if (token) headers.Authorization = `Bearer ${token}`;
+
+  const res = await fetch(`${API_URL}${path}`, { method: 'POST', headers, body: form });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error || `Request failed: ${res.status}`);
+  }
+  return res.json() as Promise<T>;
+}
+
 // ─── Auth ───────────────────────────────────────────────────────────────────
 
 export const auth = {
@@ -93,6 +108,16 @@ export const auth = {
       const me = await users.getMe();
       await persistRole(asRole(me.role));
     }
+    return { ...data, role };
+  },
+
+  async loginWithGoogle(idToken: string) {
+    const data = await request<{ token: string; userId: string; role?: UserRole }>('/auth/google', {
+      method: 'POST',
+      body: JSON.stringify({ idToken }),
+    });
+    await this.saveToken(data.token);
+    await persistRole(asRole(data.role));
     return { ...data, role };
   },
 
@@ -167,7 +192,13 @@ export const workouts = {
   }) => request<WorkoutSession & { _id: string }>('/workouts', { method: 'POST', body: JSON.stringify(session) }),
   addSet: (sessionId: string, set: LoggedSet) =>
     request<{ sets: SetLog[] }>(`/workouts/${sessionId}/sets`, { method: 'POST', body: JSON.stringify(set) }),
+  complete: (sessionId: string, completedAt?: string) =>
+    request<WorkoutSession>(`/workouts/${sessionId}/complete`, {
+      method: 'PATCH',
+      body: JSON.stringify(completedAt ? { completedAt } : {}),
+    }),
   getHistory: (limit = 50) => request<WorkoutSession[]>(`/workouts?limit=${limit}`),
+  getById: (id: string) => request<WorkoutSession>(`/workouts/${id}`),
   getProgress: (exerciseId: string) => request<ExerciseProgress>(`/workouts/progress/${exerciseId}`),
   getSummary: (range: { weekFrom: string; weekTo: string; monthFrom: string; monthTo: string }) =>
     request<WorkoutCalorieSummary>(`/workouts/summary?weekFrom=${encodeURIComponent(range.weekFrom)}&weekTo=${encodeURIComponent(range.weekTo)}&monthFrom=${encodeURIComponent(range.monthFrom)}&monthTo=${encodeURIComponent(range.monthTo)}`),
@@ -189,7 +220,12 @@ export const programs = {
 
 export const users = {
   getMe: () => request<UserProfile>('/users/me'),
-  updateMe: (data: { weightKg: number }) => request<UserProfile>('/users/me', { method: 'PATCH', body: JSON.stringify(data) }),
+  updateMe: (data: { weightKg?: number; notificationPrefs?: Partial<NotificationPrefs> }) =>
+    request<UserProfile>('/users/me', { method: 'PATCH', body: JSON.stringify(data) }),
+  registerPushToken: (token: string) =>
+    request<{ ok: true }>('/users/me/push-token', { method: 'POST', body: JSON.stringify({ token }) }),
+  unregisterPushToken: (token: string) =>
+    request<{ ok: true }>('/users/me/push-token', { method: 'DELETE', body: JSON.stringify({ token }) }),
   becomeCoach: (data: Omit<CoachProfile, 'email' | 'phone'> & { email?: string; phone?: string; contactPreference: ContactPreference }) =>
     request<UserProfile>('/users/become-coach', { method: 'POST', body: JSON.stringify(data) }),
 };
@@ -214,6 +250,7 @@ export const coaches = {
     request<CoachRequest>(`/coaches/${id}/request`, { method: 'POST', body: JSON.stringify({ message }) }),
   addVideo: (data: { title: string; description?: string; videoUrl: string; thumbnailUrl?: string; exerciseTag?: string }) =>
     request<CoachVideo>('/coaches/videos', { method: 'POST', body: JSON.stringify(data) }),
+  uploadVideo: (form: FormData) => requestForm<CoachVideo>('/coaches/videos/upload', form),
   recordView: (id: string) =>
     request<{ counted: boolean; viewCount: number; uniqueViews: number }>(`/coaches/videos/${id}/view`, { method: 'POST' }),
   reportVideo: (id: string, reason: VideoReportReason, details?: string) =>
@@ -222,6 +259,8 @@ export const coaches = {
   client: (athleteId: string) => request<CoachClientDetail>(`/coaches/me/clients/${athleteId}`),
   setClientNutritionGoals: (athleteId: string, data: { dailyCalories: number; dailyProtein: number; dailyWater: number; goal: NutritionGoalKind }) =>
     request<NutritionGoals>(`/coaches/me/clients/${athleteId}/nutrition-goals`, { method: 'POST', body: JSON.stringify(data) }),
+  setClientNutritionPlan: (athleteId: string, data: NutritionPlanInput) =>
+    request<NutritionPlan>(`/coaches/me/clients/${athleteId}/nutrition-plan`, { method: 'POST', body: JSON.stringify(data) }),
 };
 
 export const coachRequests = {
@@ -237,6 +276,9 @@ type NutritionLogUpdate = Pick<NutritionDayLog, 'date' | 'meals' | 'waterMl'>;
 type MealInput = Omit<NutritionMeal, '_id' | 'loggedAt'>;
 
 export const nutrition = {
+  publicPlans: () => request<NutritionPlan[]>('/nutrition/plans'),
+  createPublicPlan: (data: NutritionPlanInput) =>
+    request<NutritionPlan>('/nutrition/plans', { method: 'POST', body: JSON.stringify(data) }),
   getGoals: () => request<{ goals: NutritionGoals | null; needsOnboarding: boolean }>('/nutrition/goals'),
   saveGoals: (data: { dailyCalories: number; dailyProtein: number; dailyWater: number; goal: NutritionGoalKind }) =>
     request<{ goals: NutritionGoals; needsOnboarding: false }>('/nutrition/goals', { method: 'POST', body: JSON.stringify(data) }),

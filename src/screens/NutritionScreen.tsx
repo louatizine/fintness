@@ -1,6 +1,5 @@
 import { useCallback, useState } from 'react';
 import {
-  Alert,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -18,6 +17,7 @@ import { useTranslation } from 'react-i18next';
 import { nutrition } from '../services/api';
 import { radius, spacing, useTheme, useThemedStyles, type ThemeColors } from '../theme';
 import { EmptyState } from '../components/EmptyState';
+import { AppDialog } from '../components/AppDialog';
 import { ScreenSkeleton } from '../components/Skeleton';
 import { apiErrorMessage, formatDate, formatNumber } from '../../i18n';
 import type {
@@ -25,6 +25,7 @@ import type {
   NutritionGoalKind,
   NutritionGoals,
   NutritionMeal,
+  NutritionPlan,
   NutritionSuggestion,
   Sex,
 } from '../types/models';
@@ -262,6 +263,8 @@ export function NutritionScreen() {
   const [needsOnboarding, setNeedsOnboarding] = useState(false);
   const [editingGoals, setEditingGoals] = useState(false);
   const [meals, setMeals] = useState<NutritionMeal[]>([]);
+  const [coachPlan, setCoachPlan] = useState<NutritionPlan | null>(null);
+  const [publicPlans, setPublicPlans] = useState<NutritionPlan[]>([]);
   const [waterMl, setWaterMl] = useState(0);
   const [mealOpen, setMealOpen] = useState(false);
   const [mealName, setMealName] = useState('');
@@ -271,12 +274,18 @@ export function NutritionScreen() {
   const [mealFat, setMealFat] = useState('');
   const [customWater, setCustomWater] = useState('');
   const [saving, setSaving] = useState(false);
+  const [mealToDelete, setMealToDelete] = useState<NutritionMeal | null>(null);
 
   const load = useCallback(async () => {
     try {
       setError('');
-      const log = await nutrition.getLog(date);
+      const [log, plans] = await Promise.all([
+        nutrition.getLog(date),
+        nutrition.publicPlans(),
+      ]);
       setGoals(log.goals);
+      setCoachPlan(log.nutritionPlan);
+      setPublicPlans(plans);
       setNeedsOnboarding(log.needsOnboarding);
       setMeals(log.meals);
       setWaterMl(log.waterMl);
@@ -343,14 +352,7 @@ export function NutritionScreen() {
   }
 
   function confirmDelete(meal: NutritionMeal) {
-    Alert.alert(t('nutrition.removeMealTitle'), t('nutrition.removeMealBody', { name: meal.name }), [
-      { text: t('common.cancel'), style: 'cancel' },
-      {
-        text: t('common.delete'),
-        style: 'destructive',
-        onPress: () => { void deleteMeal(meal._id); },
-      },
-    ]);
+    setMealToDelete(meal);
   }
 
   async function deleteMeal(mealId: string) {
@@ -378,6 +380,21 @@ export function NutritionScreen() {
 
   return (
     <KeyboardAvoidingView style={styles.screen} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      <AppDialog
+        visible={Boolean(mealToDelete)}
+        title={t('nutrition.removeMealTitle')}
+        body={mealToDelete ? t('nutrition.removeMealBody', { name: mealToDelete.name }) : ''}
+        confirmLabel={t('common.delete')}
+        cancelLabel={t('common.cancel')}
+        tone="danger"
+        icon="trash-outline"
+        onCancel={() => setMealToDelete(null)}
+        onConfirm={() => {
+          const meal = mealToDelete;
+          setMealToDelete(null);
+          if (meal) void deleteMeal(meal._id);
+        }}
+      />
       <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
         <View style={styles.header}>
           <View style={{ flex: 1, paddingEnd: spacing.sm }}>
@@ -400,6 +417,16 @@ export function NutritionScreen() {
           />
         ) : goals ? (
           <>
+            {coachPlan ? (
+              <View style={styles.card}>
+                <Text style={styles.kicker}>{t('nutrition.coachPlan')}</Text>
+                <Text style={styles.cardTitle}>{coachPlan.title}</Text>
+                <Text style={styles.goalHint}>{t('nutrition.planByCoach', { name: coachPlan.coachName })}</Text>
+                {coachPlan.description ? <Text style={styles.cardSubtitle}>{coachPlan.description}</Text> : null}
+                {coachPlan.mealPlan ? <Text style={styles.planBody}>{coachPlan.mealPlan}</Text> : null}
+                {coachPlan.notes ? <Text style={styles.planBody}>{coachPlan.notes}</Text> : null}
+              </View>
+            ) : null}
             <View style={styles.rings}>
               <ProgressRing current={calories} goal={goals.dailyCalories} label={t('nutrition.kcal')} />
               <ProgressRing current={protein} goal={goals.dailyProtein} label={t('nutrition.protein')} />
@@ -495,6 +522,31 @@ export function NutritionScreen() {
                 </Pressable>
               ))
             )}
+
+            <Text style={styles.listLabel}>{t('nutrition.publicPlans')}</Text>
+            {publicPlans.length === 0 ? (
+              <Text style={styles.goalHint}>{t('nutrition.noPublicPlans')}</Text>
+            ) : (
+              publicPlans.map((plan) => (
+                <View key={plan.id} style={styles.mealRow}>
+                  <View style={styles.mealRowText}>
+                    <Text style={styles.mealName}>{plan.title}</Text>
+                    <Text style={styles.mealMeta}>{t('nutrition.planByCoach', { name: plan.coachName })}</Text>
+                    <Text style={styles.mealMeta}>
+                      {t('coaches.nutritionPlanMacros', {
+                        kcal: formatNumber(plan.dailyCalories),
+                        protein: formatNumber(plan.dailyProtein),
+                        carbs: formatNumber(plan.dailyCarbs),
+                        fat: formatNumber(plan.dailyFat),
+                        water: formatNumber(plan.dailyWater),
+                      })}
+                    </Text>
+                    {plan.description ? <Text style={styles.mealMeta}>{plan.description}</Text> : null}
+                    {plan.mealPlan ? <Text style={styles.mealMeta}>{plan.mealPlan}</Text> : null}
+                  </View>
+                </View>
+              ))
+            )}
           </>
         ) : null}
 
@@ -520,6 +572,7 @@ function createStyles(colors: ThemeColors) {
   ringLabel: { color: colors.muted, fontSize: 11, fontWeight: '800', letterSpacing: 1, marginTop: 8 },
   remain: { color: colors.text, fontSize: 13, fontWeight: '600', marginTop: 4 },
   goalHint: { color: colors.muted, fontSize: 12, fontWeight: '700', letterSpacing: 0.8, marginTop: 8, marginBottom: spacing.md },
+  planBody: { color: colors.text, fontSize: 13, lineHeight: 19, marginTop: 8 },
   card: { backgroundColor: colors.surface, borderColor: colors.border, borderWidth: 1, borderRadius: radius.md, padding: spacing.md, marginTop: spacing.sm },
   cardHeader: { borderStartColor: colors.gold, borderStartWidth: 3, paddingStart: spacing.sm, marginBottom: spacing.md },
   kicker: { color: colors.gold, fontSize: 11, fontWeight: '800', letterSpacing: 1.5 },

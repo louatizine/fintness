@@ -37,6 +37,27 @@ function sessionIdOf(id: ObjectId) {
   return id.toHexString();
 }
 
+const MAX_ROUTE_POINTS = 800;
+const HARD_MAX_ROUTE_POINTS = 2000;
+
+function parseRoutePoints(raw: unknown): { points?: Array<{ lat: number; lng: number; timestamp: number }>; error?: string } {
+  if (raw == null) return {};
+  if (!Array.isArray(raw)) return { error: 'routePoints must be an array' };
+  if (raw.length > HARD_MAX_ROUTE_POINTS) return { error: 'Route is too large' };
+  const points: Array<{ lat: number; lng: number; timestamp: number }> = [];
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue;
+    const row = item as Record<string, unknown>;
+    const lat = asFiniteNumber(row.lat);
+    const lng = asFiniteNumber(row.lng);
+    const timestamp = asFiniteNumber(row.timestamp);
+    if (lat === null || lng === null || lat < -90 || lat > 90 || lng < -180 || lng > 180) continue;
+    points.push({ lat, lng, timestamp: timestamp ?? Date.now() });
+    if (points.length >= MAX_ROUTE_POINTS) break;
+  }
+  return { points: points.length ? points : undefined };
+}
+
 async function loadExercises(ids: string[]) {
   const objectIds = ids.map(asObjectId).filter((id): id is ObjectId => Boolean(id));
   if (objectIds.length === 0) return new Map<string, Record<string, unknown>>();
@@ -80,6 +101,11 @@ function normalizeSet(
       : typeof exercise?.metBasis === 'string'
         ? exercise.metBasis
         : null;
+    const parsedRoute = parseRoutePoints(raw.routePoints);
+    if (parsedRoute.error) return { error: parsedRoute.error };
+    const distanceSource = raw.distanceSource === 'gps' || parsedRoute.points ? 'gps' as const
+      : raw.distanceSource === 'manual' ? 'manual' as const
+        : null;
     return {
       doc: {
         ...base,
@@ -88,6 +114,8 @@ function normalizeSet(
         intensity,
         caloriesBurned: estimateCaloriesBurned({ metKey, intensity, weightKg, durationMin }),
         avgHeartRate: avgHeartRate !== null && avgHeartRate > 0 ? avgHeartRate : null,
+        ...(parsedRoute.points ? { routePoints: parsedRoute.points } : {}),
+        ...(distanceSource ? { distanceSource } : {}),
       },
     };
   }
@@ -103,7 +131,48 @@ function setVolume(set: { kind?: string; weight?: number; reps?: number }) {
   return (set.weight || 0) * (set.reps || 0);
 }
 
-async function attachSets<T extends { _id: ObjectId }>(sessions: T[]) {
+function durationFromLogs(startedAt: unknown, completedAt: unknown, sets: Array<Record<string, unknown>>) {
+  const start = typeof startedAt === 'string' ? new Date(startedAt).getTime() : NaN;
+  const explicitEnd = typeof completedAt === 'string' ? new Date(completedAt).getTime() : NaN;
+  const endTimes = [
+    explicitEnd,
+    ...sets.map((set) => typeof set.completedAt === 'string' ? new Date(set.completedAt).getTime() : NaN),
+  ].filter((time) => Number.isFinite(time));
+  const end = endTimes.length ? Math.max(...endTimes) : NaN;
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return { endedAt: null, durationMin: 0 };
+  return { endedAt: new Date(end).toISOString(), durationMin: Math.max(1, Math.round((end - start) / 60000)) };
+}
+
+function serializeSet(set: Record<string, unknown> & { _id?: ObjectId }, includeRoute = false) {
+  const { _id, routePoints, ...rest } = set;
+  const hasRoute = Array.isArray(routePoints) && routePoints.length > 0;
+  return {
+    ...rest,
+    id: _id instanceof ObjectId ? _id.toHexString() : typeof _id === 'string' ? _id : undefined,
+    hasRoute,
+    ...(includeRoute && hasRoute ? { routePoints } : {}),
+  };
+}
+
+async function stampSessionTiming(id: ObjectId, completedAt?: string | null) {
+  const session = await getDb().collection('workoutSessions').findOne({ _id: id });
+  if (!session) return null;
+  const sets = await getDb().collection('setLogs').find({ sessionId: sessionIdOf(id) }).toArray();
+  const timing = durationFromLogs(session.startedAt, completedAt ?? session.completedAt, sets as Array<Record<string, unknown>>);
+  await getDb().collection('workoutSessions').updateOne(
+    { _id: id },
+    {
+      $set: {
+        endedAt: timing.endedAt,
+        durationMin: timing.durationMin,
+        completedAt: completedAt ?? timing.endedAt,
+      },
+    }
+  );
+  return timing;
+}
+
+async function attachSets<T extends { _id: ObjectId; startedAt?: unknown; completedAt?: unknown }>(sessions: T[], includeRoute = false) {
   if (sessions.length === 0) return [];
   const ids = sessions.map((s) => sessionIdOf(s._id));
   const logs = await getDb().collection('setLogs').find({ sessionId: { $in: ids } }).sort({ completedAt: 1 }).toArray();
@@ -119,10 +188,16 @@ async function attachSets<T extends { _id: ObjectId }>(sessions: T[]) {
     const cardioSets = sets.filter((s) => s.kind === 'cardio');
     const cardioCalories = cardioSets.reduce((sum, s) => sum + (typeof s.caloriesBurned === 'number' ? s.caloriesBurned : 0), 0);
     const cardioDurationMin = cardioSets.reduce((sum, s) => sum + (Number(s.durationMin) || 0), 0);
+    const timing = durationFromLogs(session.startedAt, session.completedAt, sets as Array<Record<string, unknown>>);
+    const sessionId = sessionIdOf(session._id);
     return {
       ...session,
-      _id: sessionIdOf(session._id),
-      sets,
+      _id: sessionId,
+      id: sessionId,
+      sets: sets.map((set) => serializeSet(set as Record<string, unknown> & { _id?: ObjectId }, includeRoute)),
+      endedAt: timing.endedAt,
+      completedAt: typeof session.completedAt === 'string' ? session.completedAt : timing.endedAt,
+      durationMin: timing.durationMin,
       exerciseNames: [...new Set(sets.map((s) => String(s.exerciseName || 'Exercise')))],
       kinds: [...kinds],
       cardioDurationMin,
@@ -185,7 +260,15 @@ workoutsRouter.post('/', async (req: Request, res: Response) => {
     if (inserted.volume) {
       await getDb().collection('workoutSessions').updateOne({ _id: result.insertedId }, { $set: { totalVolume: inserted.volume } });
     }
-    res.status(201).json({ _id: sessionId, ...session, totalVolume: inserted.volume, sets: inserted.sets });
+    const timing = await stampSessionTiming(result.insertedId);
+    res.status(201).json({
+      _id: sessionId,
+      id: sessionId,
+      ...session,
+      totalVolume: inserted.volume,
+      sets: inserted.sets,
+      ...(timing ?? {}),
+    });
   } catch (err) {
     console.error('Create workout error:', err);
     res.status(500).json({ error: 'Internal server error' });
@@ -215,9 +298,32 @@ workoutsRouter.post('/:id/sets', async (req: Request, res: Response) => {
     if (inserted.volume) {
       await getDb().collection('workoutSessions').updateOne({ _id: id }, { $inc: { totalVolume: inserted.volume } });
     }
+    await stampSessionTiming(id);
     res.status(201).json({ sets: inserted.sets });
   } catch (err) {
     console.error('Add set error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+workoutsRouter.patch('/:id/complete', async (req: Request, res: Response) => {
+  try {
+    const id = asObjectId(String(req.params.id));
+    if (!id) {
+      res.status(400).json({ error: 'Invalid session id' });
+      return;
+    }
+    const session = await getDb().collection('workoutSessions').findOne({ _id: id, userId: req.user!.userId });
+    if (!session) {
+      res.status(404).json({ error: 'Session not found' });
+      return;
+    }
+    const completedAt = typeof req.body?.completedAt === 'string' ? req.body.completedAt : new Date().toISOString();
+    await stampSessionTiming(id, completedAt);
+    const updated = await getDb().collection('workoutSessions').findOne({ _id: id });
+    res.json((await attachSets(updated ? [updated] : []))[0] ?? { ok: true });
+  } catch (err) {
+    console.error('Complete workout error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
@@ -328,6 +434,25 @@ workoutsRouter.get('/progress/:exerciseId', async (req: Request, res: Response) 
     res.json({ type: 'strength', points });
   } catch (err) {
     console.error('Get progress error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+workoutsRouter.get('/:id', async (req: Request, res: Response) => {
+  try {
+    const id = asObjectId(String(req.params.id));
+    if (!id) {
+      res.status(400).json({ error: 'Invalid session id' });
+      return;
+    }
+    const session = await getDb().collection('workoutSessions').findOne({ _id: id, userId: req.user!.userId });
+    if (!session) {
+      res.status(404).json({ error: 'Session not found' });
+      return;
+    }
+    res.json((await attachSets([session], true))[0]);
+  } catch (err) {
+    console.error('Get workout error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
 });

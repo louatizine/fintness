@@ -17,6 +17,9 @@ export async function connectDb(): Promise<Db> {
   db = client.db();
   await db.collection('nutritionGoals').createIndex({ userId: 1 }, { unique: true });
   await db.collection('nutritionLogs').createIndex({ userId: 1, date: 1 }, { unique: true });
+  await db.collection('nutritionPlans').createIndex({ visibility: 1, createdAt: -1 });
+  await db.collection('nutritionPlans').createIndex({ assignedToUserId: 1, active: 1 });
+  await db.collection('nutritionPlans').createIndex({ coachId: 1, createdAt: -1 });
   await db.collection('exercises').createIndex({ seedKey: 1 }, { unique: true, sparse: true });
   await db.collection('exercisePreferences').createIndex({ userId: 1, exerciseId: 1 }, { unique: true });
   await db.collection('setLogs').createIndex({ userId: 1, exerciseId: 1 });
@@ -27,6 +30,8 @@ export async function connectDb(): Promise<Db> {
   await db.collection('programs').createIndex({ createdByCoachId: 1 });
   await db.collection('userPrograms').createIndex({ userId: 1, active: 1 });
   await db.collection('users').createIndex({ role: 1 });
+  await db.collection('users').createIndex({ email: 1 }, { unique: true });
+  await db.collection('users').createIndex({ googleId: 1 }, { unique: true, sparse: true });
   await db.collection('coachRequests').createIndex({ coachId: 1, createdAt: -1 });
   await db.collection('coachRequests').createIndex({ athleteId: 1, coachId: 1 });
   await db.collection('coachVideos').createIndex({ coachId: 1, createdAt: -1 });

@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  Alert,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -10,22 +9,55 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import { useFocusEffect } from '@react-navigation/native';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { Ionicons } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Haptics from 'expo-haptics';
 import { useTranslation } from 'react-i18next';
 import { exercises as exercisesApi, programs as programsApi, users, workouts } from '../services/api';
 import { ExerciseHowToModal, ExerciseThumb, HowToButton } from '../components/ExerciseHowTo';
 import { ProgramPicker } from './ProgramPicker';
 import { EmptyState } from '../components/EmptyState';
+import { AppDialog } from '../components/AppDialog';
 import { ScreenSkeleton } from '../components/Skeleton';
 import { radius, spacing, useTheme, useThemedStyles, type ThemeColors } from '../theme';
 import { apiErrorMessage, formatDate } from '../../i18n';
 import type { ActiveProgramSlot, CardioIntensity, Equipment, Exercise, ExerciseKind, SetLog } from '../types/models';
 import { EQUIPMENT } from '../types/models';
+import { isGpsTrackable } from '../utils/metPreview';
+import type { GpsSeedKey, TodayStackParamList } from '../navigation';
 
 const DEFAULT_LINEUP = ['Front squat', 'Romanian deadlift', 'Hanging knee raise'];
 const MUSCLE_GROUPS = ['legs', 'chest', 'back', 'shoulders', 'core', 'arms', 'cardio'];
+const ACTIVE_SESSION_KEY = 'ironlog.activeWorkoutSession';
+
+type StoredSession = { dayKey: string; sessionId: string };
+
+async function readStoredSession(): Promise<StoredSession | null> {
+  try {
+    const raw = await AsyncStorage.getItem(ACTIVE_SESSION_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as StoredSession;
+    if (!parsed?.dayKey || !parsed?.sessionId) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+async function writeStoredSession(dayKey: string, sessionId: string) {
+  await AsyncStorage.setItem(ACTIVE_SESSION_KEY, JSON.stringify({ dayKey, sessionId } satisfies StoredSession));
+}
+
+async function clearStoredSession() {
+  await AsyncStorage.removeItem(ACTIVE_SESSION_KEY);
+}
+
+type ConfirmState =
+  | { kind: 'advance'; advanceKind: 'complete' | 'skip' }
+  | { kind: 'deleteExercise'; exercise: Exercise }
+  | null;
 
 type Draft = {
   weight: number;
@@ -205,6 +237,7 @@ function AddExerciseForm({
 
 export function TodayScreen() {
   const { t } = useTranslation();
+  const navigation = useNavigation<NativeStackNavigationProp<TodayStackParamList, 'TodayHome'>>();
   const { colors, styles } = useScreenTheme();
   const [library, setLibrary] = useState<Exercise[]>([]);
   const [lineupIds, setLineupIds] = useState<string[]>([]);
@@ -222,7 +255,11 @@ export function TodayScreen() {
   const [active, setActive] = useState<ActiveState | null>(null);
   const [browsePrograms, setBrowsePrograms] = useState(false);
   const [howTo, setHowTo] = useState<Exercise | null>(null);
+  const [pendingDialog, setPendingDialog] = useState<ConfirmState>(null);
+  const [manualGps, setManualGps] = useState<Record<string, boolean>>({});
   const dayKey = useRef<string | null>(null);
+  const sessionIdRef = useRef<string | null>(null);
+  const sessionStartedAt = useRef<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -242,8 +279,28 @@ export function TodayScreen() {
       const slots = new Map((nextActive?.today.exercises ?? []).map((slot) => [slot.exerciseId, slot]));
       if (dayKey.current !== nextKey) {
         dayKey.current = nextKey;
-        setCompleted({});
-        setSessionId(null);
+        const stored = await readStoredSession();
+        if (stored?.dayKey === nextKey && stored.sessionId) {
+          sessionIdRef.current = stored.sessionId;
+          setSessionId(stored.sessionId);
+          try {
+            const history = await workouts.getHistory(10);
+            const session = history.find((item) => (item._id || item.id) === stored.sessionId);
+            sessionStartedAt.current = session?.startedAt ?? null;
+            const counts: Record<string, number> = {};
+            for (const set of session?.sets ?? []) {
+              if (set.exerciseId) counts[set.exerciseId] = (counts[set.exerciseId] ?? 0) + 1;
+            }
+            setCompleted(counts);
+          } catch {
+            setCompleted({});
+          }
+        } else {
+          sessionIdRef.current = null;
+          sessionStartedAt.current = null;
+          setCompleted({});
+          setSessionId(null);
+        }
         if (nextActive) {
           setLineupIds(nextActive.today.exercises.map((slot) => slot.exerciseId));
         } else {
@@ -293,20 +350,90 @@ export function TodayScreen() {
     setDrafts((current) => ({ ...current, [id]: { ...(current[id] ?? defaultDraft(byId.get(id)!)), ...patch } }));
   }
 
+  async function rememberSession(id: string, startedAt?: string) {
+    sessionIdRef.current = id;
+    sessionStartedAt.current = startedAt ?? sessionStartedAt.current ?? new Date().toISOString();
+    setSessionId(id);
+    if (dayKey.current) await writeStoredSession(dayKey.current, id);
+  }
+
   async function persistSet(set: Omit<SetLog, 'id' | 'sessionId' | 'completed'>) {
-    if (!sessionId) {
+    const currentId = sessionIdRef.current ?? sessionId;
+    if (!currentId) {
+      const startedAt = sessionStartedAt.current ?? new Date().toISOString();
       const session = await workouts.log({
+        startedAt,
         sets: [set],
         userProgramId: active?.assignment.id,
         programId: active?.assignment.programId,
         dayIndex: active?.today.dayIndex,
         dayLabel: active?.today.dayLabel,
       });
-      setSessionId(session._id);
+      await rememberSession(session._id, session.startedAt ?? startedAt);
       return session.sets?.[0];
     }
-    const result = await workouts.addSet(sessionId, set);
+    const result = await workouts.addSet(currentId, set);
     return result.sets[0];
+  }
+
+  function draftToSet(exercise: Exercise): Omit<SetLog, 'id' | 'sessionId' | 'completed'> | null {
+    const draft = drafts[exercise.id] ?? defaultDraft(exercise, slotById.get(exercise.id));
+    const setNumber = (completed[exercise.id] ?? 0) + 1;
+    const completedAt = new Date().toISOString();
+    if (exercise.type === 'cardio') {
+      if (draft.durationMin <= 0) return null;
+      const distance = Number(draft.distanceKm.replace(',', '.'));
+      return {
+        exerciseId: exercise.id,
+        exerciseName: exercise.name,
+        kind: 'cardio',
+        setNumber,
+        durationMin: draft.durationMin,
+        distanceKm: Number.isFinite(distance) && distance > 0 ? distance : null,
+        intensity: draft.intensity,
+        completedAt,
+      };
+    }
+    if (draft.reps <= 0 || draft.weight < 0) return null;
+    return {
+      exerciseId: exercise.id,
+      exerciseName: exercise.name,
+      kind: 'strength',
+      setNumber,
+      weight: draft.weight,
+      reps: draft.reps,
+      completedAt,
+    };
+  }
+
+  async function saveUnloggedDrafts() {
+    const sets = lineup
+      .filter((exercise) => (completed[exercise.id] ?? 0) === 0)
+      .filter((exercise) => !isGpsTrackable(exercise.seedKey) || manualGps[exercise.id])
+      .map(draftToSet)
+      .filter((set): set is Omit<SetLog, 'id' | 'sessionId' | 'completed'> => Boolean(set));
+    if (sets.length === 0) return sessionIdRef.current ?? sessionId;
+    const currentId = sessionIdRef.current ?? sessionId;
+    if (!currentId) {
+      const startedAt = sessionStartedAt.current ?? new Date().toISOString();
+      const session = await workouts.log({
+        startedAt,
+        sets,
+        userProgramId: active?.assignment.id,
+        programId: active?.assignment.programId,
+        dayIndex: active?.today.dayIndex,
+        dayLabel: active?.today.dayLabel,
+      });
+      await rememberSession(session._id, session.startedAt ?? startedAt);
+    } else {
+      for (const set of sets) await workouts.addSet(currentId, set);
+    }
+    setCompleted((current) => {
+      const next = { ...current };
+      for (const set of sets) next[set.exerciseId] = (next[set.exerciseId] ?? 0) + 1;
+      return next;
+    });
+    return sessionIdRef.current ?? sessionId;
   }
 
   async function completeStrength(exercise: Exercise) {
@@ -331,6 +458,24 @@ export function TodayScreen() {
     } finally {
       setSaving(false);
     }
+  }
+
+  function startGps(exercise: Exercise) {
+    const seedKey = exercise.seedKey;
+    if (seedKey !== 'running' && seedKey !== 'cycling') return;
+    navigation.navigate('RunTracking', {
+      exerciseId: exercise.id,
+      exerciseName: exercise.name,
+      seedKey: seedKey as GpsSeedKey,
+      weightKg,
+      dayKey: dayKey.current ?? 'free',
+      setNumber: (completed[exercise.id] ?? 0) + 1,
+      userProgramId: active?.assignment.id,
+      programId: active?.assignment.programId,
+      dayIndex: active?.today.dayIndex,
+      dayLabel: active?.today.dayLabel,
+      intensity: (drafts[exercise.id] ?? defaultDraft(exercise)).intensity,
+    });
   }
 
   async function completeCardio(exercise: Exercise) {
@@ -389,7 +534,13 @@ export function TodayScreen() {
     setError('');
     try {
       if (kind === 'complete') {
+        const id = await saveUnloggedDrafts();
+        if (id) await workouts.complete(id).catch(() => null);
         await programsApi.completeDay();
+        await clearStoredSession();
+        sessionIdRef.current = null;
+        sessionStartedAt.current = null;
+        setSessionId(null);
         void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       } else {
         await programsApi.skipDay();
@@ -404,35 +555,30 @@ export function TodayScreen() {
   }
 
   function confirmAdvance(kind: 'complete' | 'skip') {
-    Alert.alert(
-      kind === 'complete' ? t('today.finishDayTitle') : t('today.skipDayTitle'),
-      kind === 'complete' ? t('today.finishDayBody') : t('today.skipDayBody'),
-      [
-        { text: t('common.cancel'), style: 'cancel' },
-        { text: kind === 'complete' ? t('today.finish') : t('common.skip'), onPress: () => void advanceDay(kind) },
-      ]
-    );
+    setPendingDialog({ kind: 'advance', advanceKind: kind });
   }
 
   function confirmDelete(exercise: Exercise) {
-    Alert.alert(t('today.deleteExerciseTitle'), t('today.deleteExerciseBody', { name: exercise.name }), [
-      { text: t('common.cancel'), style: 'cancel' },
-      {
-        text: t('common.delete'),
-        style: 'destructive',
-        onPress: () => {
-          void (async () => {
-            try {
-              await exercisesApi.remove(exercise.id);
-              setLineupIds((ids) => ids.filter((id) => id !== exercise.id));
-              setLibrary((current) => current.filter((item) => item.id !== exercise.id));
-            } catch (err) {
-              setError(apiErrorMessage(err, t('today.deleteFailed')));
-            }
-          })();
-        },
-      },
-    ]);
+    setPendingDialog({ kind: 'deleteExercise', exercise });
+  }
+
+  function runConfirm() {
+    const current = pendingDialog;
+    setPendingDialog(null);
+    if (!current) return;
+    if (current.kind === 'advance') {
+      void advanceDay(current.advanceKind);
+      return;
+    }
+    void (async () => {
+      try {
+        await exercisesApi.remove(current.exercise.id);
+        setLineupIds((ids) => ids.filter((id) => id !== current.exercise.id));
+        setLibrary((items) => items.filter((item) => item.id !== current.exercise.id));
+      } catch (err) {
+        setError(apiErrorMessage(err, t('today.deleteFailed')));
+      }
+    })();
   }
 
   if (loading) return <ScreenSkeleton variant="list" />;
@@ -441,6 +587,29 @@ export function TodayScreen() {
 
   return (
     <KeyboardAvoidingView style={styles.screen} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      <AppDialog
+        visible={Boolean(pendingDialog)}
+        title={
+          pendingDialog?.kind === 'advance'
+            ? pendingDialog.advanceKind === 'complete' ? t('today.finishDayTitle') : t('today.skipDayTitle')
+            : t('today.deleteExerciseTitle')
+        }
+        body={
+          pendingDialog?.kind === 'advance'
+            ? pendingDialog.advanceKind === 'complete' ? t('today.finishDayBody') : t('today.skipDayBody')
+            : pendingDialog ? t('today.deleteExerciseBody', { name: pendingDialog.exercise.name }) : ''
+        }
+        confirmLabel={
+          pendingDialog?.kind === 'advance'
+            ? pendingDialog.advanceKind === 'complete' ? t('today.finish') : t('common.skip')
+            : t('common.delete')
+        }
+        cancelLabel={t('common.cancel')}
+        tone={pendingDialog?.kind === 'deleteExercise' || (pendingDialog?.kind === 'advance' && pendingDialog.advanceKind === 'skip') ? 'danger' : 'success'}
+        icon={pendingDialog?.kind === 'deleteExercise' ? 'trash-outline' : pendingDialog?.advanceKind === 'complete' ? 'checkmark-done-outline' : 'play-skip-forward-outline'}
+        onCancel={() => setPendingDialog(null)}
+        onConfirm={runConfirm}
+      />
       <ScrollView style={styles.screen} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
         <View style={styles.header}>
           <View style={{ flex: 1, paddingEnd: spacing.sm }}>
@@ -569,42 +738,64 @@ export function TodayScreen() {
                     </>
                   ) : (
                     <>
-                      <View style={styles.controls}>
-                        <Stepper label={t('today.duration')} value={draft.durationMin} suffix=" min" step={1} min={1} onChange={(durationMin) => patchDraft(exercise.id, { durationMin })} />
-                        <View>
-                          <Text style={styles.controlLabel}>{t('today.distanceKm')}</Text>
-                          <TextInput
-                            value={draft.distanceKm}
-                            onChangeText={(distanceKm) => patchDraft(exercise.id, { distanceKm })}
-                            keyboardType="decimal-pad"
-                            placeholder={t('common.optional')}
-                            placeholderTextColor={colors.muted}
-                            style={styles.smallInput}
-                          />
-                        </View>
-                      </View>
-                      <Text style={styles.controlLabel}>{t('today.intensity')}</Text>
-                      <View style={styles.chipRow}>
-                        {([
-                          ['low', 'today.intensityLow'],
-                          ['moderate', 'today.intensityModerate'],
-                          ['high', 'today.intensityHigh'],
-                        ] as const).map(([level, key]) => (
-                          <Chip
-                            key={level}
-                            label={t(key)}
-                            active={draft.intensity === level}
-                            onPress={() => patchDraft(exercise.id, { intensity: level })}
-                          />
-                        ))}
-                      </View>
-                      {typeof lastCalories[exercise.id] === 'number' ? (
-                        <Text style={styles.target}>{t('today.lastLogKcal', { kcal: lastCalories[exercise.id] })}</Text>
+                      {Platform.OS !== 'web' && isGpsTrackable(exercise.seedKey) ? (
+                        <>
+                          <Pressable style={[styles.completeButton, saving && styles.disabled]} disabled={saving} onPress={() => startGps(exercise)}>
+                            <Ionicons name={exercise.seedKey === 'cycling' ? 'bicycle' : 'walk'} size={22} color={colors.ink} />
+                            <Text style={styles.completeText} numberOfLines={2}>
+                              {exercise.seedKey === 'cycling' ? t('today.startRide') : t('today.startRun')}
+                            </Text>
+                          </Pressable>
+                          <Pressable
+                            onPress={() => setManualGps((current) => ({ ...current, [exercise.id]: !current[exercise.id] }))}
+                            style={styles.textButton}
+                          >
+                            <Text style={styles.textButtonLabel}>
+                              {manualGps[exercise.id] ? t('today.hideManualLog') : t('today.logWithoutGps')}
+                            </Text>
+                          </Pressable>
+                        </>
                       ) : null}
-                      <Pressable style={[styles.completeButton, saving && styles.disabled]} disabled={saving} onPress={() => void completeCardio(exercise)}>
-                        <Ionicons name="checkmark-circle" size={22} color={done ? colors.success : colors.ink} />
-                        <Text style={styles.completeText} numberOfLines={2}>{done ? t('today.logCardioDone', { n: done }) : t('today.logCardio')}</Text>
-                      </Pressable>
+                      {!isGpsTrackable(exercise.seedKey) || manualGps[exercise.id] || Platform.OS === 'web' ? (
+                        <>
+                          <View style={styles.controls}>
+                            <Stepper label={t('today.duration')} value={draft.durationMin} suffix=" min" step={1} min={1} onChange={(durationMin) => patchDraft(exercise.id, { durationMin })} />
+                            <View>
+                              <Text style={styles.controlLabel}>{t('today.distanceKm')}</Text>
+                              <TextInput
+                                value={draft.distanceKm}
+                                onChangeText={(distanceKm) => patchDraft(exercise.id, { distanceKm })}
+                                keyboardType="decimal-pad"
+                                placeholder={t('common.optional')}
+                                placeholderTextColor={colors.muted}
+                                style={styles.smallInput}
+                              />
+                            </View>
+                          </View>
+                          <Text style={styles.controlLabel}>{t('today.intensity')}</Text>
+                          <View style={styles.chipRow}>
+                            {([
+                              ['low', 'today.intensityLow'],
+                              ['moderate', 'today.intensityModerate'],
+                              ['high', 'today.intensityHigh'],
+                            ] as const).map(([level, key]) => (
+                              <Chip
+                                key={level}
+                                label={t(key)}
+                                active={draft.intensity === level}
+                                onPress={() => patchDraft(exercise.id, { intensity: level })}
+                              />
+                            ))}
+                          </View>
+                          {typeof lastCalories[exercise.id] === 'number' ? (
+                            <Text style={styles.target}>{t('today.lastLogKcal', { kcal: lastCalories[exercise.id] })}</Text>
+                          ) : null}
+                          <Pressable style={[styles.completeButton, saving && styles.disabled]} disabled={saving} onPress={() => void completeCardio(exercise)}>
+                            <Ionicons name="checkmark-circle" size={22} color={done ? colors.success : colors.ink} />
+                            <Text style={styles.completeText} numberOfLines={2}>{done ? t('today.logCardioDone', { n: done }) : t('today.logCardio')}</Text>
+                          </Pressable>
+                        </>
+                      ) : null}
                     </>
                   )}
                 </View>

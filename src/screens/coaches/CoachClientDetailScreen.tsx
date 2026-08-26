@@ -31,7 +31,13 @@ export function CoachClientDetailScreen() {
   const [tab, setTab] = useState<Tab>('info');
   const [calories, setCalories] = useState('');
   const [protein, setProtein] = useState('');
+  const [carbs, setCarbs] = useState('');
+  const [fat, setFat] = useState('');
   const [water, setWater] = useState('');
+  const [planTitle, setPlanTitle] = useState('');
+  const [planDescription, setPlanDescription] = useState('');
+  const [mealPlan, setMealPlan] = useState('');
+  const [planNotes, setPlanNotes] = useState('');
   const [goal, setGoal] = useState<NutritionGoalKind>('maintain');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -47,11 +53,23 @@ export function CoachClientDetailScreen() {
       ]);
       setCoachId(me.id);
       setDetail(client);
-      if (client.nutritionGoals) {
+      if (client.nutritionPlan) {
+        setPlanTitle(client.nutritionPlan.title);
+        setPlanDescription(client.nutritionPlan.description);
+        setCalories(String(client.nutritionPlan.dailyCalories));
+        setProtein(String(client.nutritionPlan.dailyProtein));
+        setCarbs(String(client.nutritionPlan.dailyCarbs));
+        setFat(String(client.nutritionPlan.dailyFat));
+        setWater(String(client.nutritionPlan.dailyWater));
+        setGoal(client.nutritionPlan.goal);
+        setMealPlan(client.nutritionPlan.mealPlan);
+        setPlanNotes(client.nutritionPlan.notes);
+      } else if (client.nutritionGoals) {
         setCalories(String(client.nutritionGoals.dailyCalories));
         setProtein(String(client.nutritionGoals.dailyProtein));
         setWater(String(client.nutritionGoals.dailyWater));
         setGoal(client.nutritionGoals.goal);
+        setPlanTitle(t('coaches.clientNutritionPlanDefaultTitle', { name: route.params.athleteLabel }));
       }
     } catch (err) {
       setError(apiErrorMessage(err, t('coaches.clientFailed')));
@@ -65,20 +83,46 @@ export function CoachClientDetailScreen() {
   async function saveNutrition() {
     const dailyCalories = Number(calories.replace(',', '.'));
     const dailyProtein = Number(protein.replace(',', '.'));
+    const dailyCarbs = Number(carbs.replace(',', '.'));
+    const dailyFat = Number(fat.replace(',', '.'));
     const dailyWater = Number(water.replace(',', '.'));
-    if (!Number.isFinite(dailyCalories) || dailyCalories <= 0 || !Number.isFinite(dailyProtein) || dailyProtein < 0 || !Number.isFinite(dailyWater) || dailyWater <= 0) {
-      setError(t('nutrition.needTargets'));
+    if (!planTitle.trim() || !Number.isFinite(dailyCalories) || dailyCalories <= 0 || !Number.isFinite(dailyProtein) || dailyProtein < 0 || !Number.isFinite(dailyWater) || dailyWater <= 0) {
+      setError(t('nutrition.planRequired'));
       return;
     }
     setSaving(true);
     setError('');
     setInfo('');
     try {
-      const goals = await coaches.setClientNutritionGoals(route.params.athleteId, { dailyCalories, dailyProtein, dailyWater, goal });
-      setDetail((current) => (current ? { ...current, nutritionGoals: goals } : current));
-      setInfo(t('coaches.nutritionSaved', { name: route.params.athleteLabel }));
+      const nutritionPlan = await coaches.setClientNutritionPlan(route.params.athleteId, {
+        title: planTitle.trim(),
+        description: planDescription.trim(),
+        dailyCalories,
+        dailyProtein,
+        dailyCarbs: Number.isFinite(dailyCarbs) ? dailyCarbs : 0,
+        dailyFat: Number.isFinite(dailyFat) ? dailyFat : 0,
+        dailyWater,
+        goal,
+        mealPlan: mealPlan.trim(),
+        notes: planNotes.trim(),
+      });
+      setDetail((current) => (current ? {
+        ...current,
+        nutritionPlan,
+        nutritionGoals: {
+          dailyCalories: nutritionPlan.dailyCalories,
+          dailyProtein: nutritionPlan.dailyProtein,
+          dailyWater: nutritionPlan.dailyWater,
+          goal: nutritionPlan.goal,
+          source: 'coach',
+          setByCoachId: nutritionPlan.coachId,
+          setByCoachName: nutritionPlan.coachName,
+          updatedAt: nutritionPlan.updatedAt,
+        },
+      } : current));
+      setInfo(t('coaches.nutritionPlanSaved', { name: route.params.athleteLabel }));
     } catch (err) {
-      setError(apiErrorMessage(err, t('coaches.nutritionSaveFailed')));
+      setError(apiErrorMessage(err, t('coaches.nutritionPlanSaveFailed')));
     } finally {
       setSaving(false);
     }
@@ -87,6 +131,7 @@ export function CoachClientDetailScreen() {
   if (loading) return <ScreenSkeleton />;
 
   const goals = detail?.nutritionGoals;
+  const nutritionPlan = detail?.nutritionPlan;
   const program = detail?.program;
   const ownsProgram = Boolean(program && program.createdByCoachId === coachId);
   const started = shortDate(detail?.coachingStartedAt ?? null);
@@ -156,8 +201,24 @@ export function CoachClientDetailScreen() {
       {tab === 'nutrition' ? (
         <>
           <View style={styles.card}>
-            <Text style={styles.kicker}>{t('coaches.currentGoals')}</Text>
-            {goals ? (
+            <Text style={styles.kicker}>{t('coaches.currentNutritionPlan')}</Text>
+            {nutritionPlan ? (
+              <>
+                <Text style={styles.cardTitle}>{nutritionPlan.title}</Text>
+                {nutritionPlan.description ? <Text style={styles.body}>{nutritionPlan.description}</Text> : null}
+                <Text style={styles.body}>
+                  {t('coaches.nutritionPlanMacros', {
+                    kcal: formatNumber(nutritionPlan.dailyCalories),
+                    protein: formatNumber(nutritionPlan.dailyProtein),
+                    carbs: formatNumber(nutritionPlan.dailyCarbs),
+                    fat: formatNumber(nutritionPlan.dailyFat),
+                    water: formatNumber(nutritionPlan.dailyWater),
+                  })}
+                </Text>
+                {nutritionPlan.mealPlan ? <Text style={styles.meta}>{nutritionPlan.mealPlan}</Text> : null}
+                {nutritionPlan.notes ? <Text style={styles.meta}>{nutritionPlan.notes}</Text> : null}
+              </>
+            ) : goals ? (
               <>
                 <Text style={styles.cardTitle}>{t(`nutrition.${goals.goal}`)}</Text>
                 <Text style={styles.body}>
@@ -174,11 +235,27 @@ export function CoachClientDetailScreen() {
             )}
           </View>
           <View style={styles.card}>
-            <Text style={styles.kicker}>{t('coaches.setNutritionGoals')}</Text>
+            <Text style={styles.kicker}>{t('coaches.setNutritionPlan')}</Text>
+            <Text style={styles.label}>{t('nutrition.planTitle')}</Text>
+            <TextInput value={planTitle} onChangeText={setPlanTitle} placeholder={t('nutrition.planTitlePlaceholder')} placeholderTextColor={colors.muted} style={styles.input} />
+            <Text style={styles.label}>{t('nutrition.planDescription')}</Text>
+            <TextInput value={planDescription} onChangeText={setPlanDescription} placeholder={t('nutrition.planDescriptionPlaceholder')} placeholderTextColor={colors.muted} style={styles.input} />
             <Text style={styles.label}>{t('nutrition.kcal')}</Text>
             <TextInput value={calories} onChangeText={setCalories} keyboardType="number-pad" placeholderTextColor={colors.muted} style={styles.input} />
-            <Text style={styles.label}>{t('nutrition.proteinG')}</Text>
-            <TextInput value={protein} onChangeText={setProtein} keyboardType="decimal-pad" placeholderTextColor={colors.muted} style={styles.input} />
+            <View style={styles.fieldRow}>
+              <View style={styles.field}>
+                <Text style={styles.label}>{t('nutrition.proteinG')}</Text>
+                <TextInput value={protein} onChangeText={setProtein} keyboardType="decimal-pad" placeholderTextColor={colors.muted} style={styles.input} />
+              </View>
+              <View style={styles.field}>
+                <Text style={styles.label}>{t('nutrition.carbs')}</Text>
+                <TextInput value={carbs} onChangeText={setCarbs} keyboardType="decimal-pad" placeholderTextColor={colors.muted} style={styles.input} />
+              </View>
+              <View style={styles.field}>
+                <Text style={styles.label}>{t('nutrition.fat')}</Text>
+                <TextInput value={fat} onChangeText={setFat} keyboardType="decimal-pad" placeholderTextColor={colors.muted} style={styles.input} />
+              </View>
+            </View>
             <Text style={styles.label}>{t('nutrition.waterMl')}</Text>
             <TextInput value={water} onChangeText={setWater} keyboardType="number-pad" placeholderTextColor={colors.muted} style={styles.input} />
             <View style={styles.chipRow}>
@@ -186,8 +263,12 @@ export function CoachClientDetailScreen() {
                 <CoachChip key={item} label={t(`nutrition.${item}`)} active={goal === item} onPress={() => setGoal(item)} />
               ))}
             </View>
+            <Text style={styles.label}>{t('nutrition.mealPlan')}</Text>
+            <TextInput value={mealPlan} onChangeText={setMealPlan} placeholder={t('nutrition.mealPlanPlaceholder')} placeholderTextColor={colors.muted} style={[styles.input, styles.multiline]} multiline />
+            <Text style={styles.label}>{t('nutrition.planNotes')}</Text>
+            <TextInput value={planNotes} onChangeText={setPlanNotes} placeholder={t('nutrition.planNotesPlaceholder')} placeholderTextColor={colors.muted} style={[styles.input, styles.multiline]} multiline />
             <Pressable onPress={() => void saveNutrition()} disabled={saving} style={[styles.primary, saving && styles.disabled]}>
-              {saving ? <ActivityIndicator color={colors.ink} /> : <Text style={styles.primaryText}>{t('common.save')}</Text>}
+              {saving ? <ActivityIndicator color={colors.ink} /> : <Text style={styles.primaryText}>{t('coaches.saveNutritionPlan')}</Text>}
             </Pressable>
           </View>
         </>
@@ -245,6 +326,9 @@ function createStyles(colors: ThemeColors) {
     slotName: { color: colors.text, fontWeight: '800', fontSize: 16 },
     label: { color: colors.muted, fontSize: 11, fontWeight: '800', letterSpacing: 1, marginBottom: 7, marginTop: spacing.sm },
     input: { backgroundColor: colors.background, borderColor: colors.border, borderWidth: 1, color: colors.text, minHeight: 46, paddingHorizontal: 12, fontSize: 15, borderRadius: radius.sm },
+    multiline: { minHeight: 92, paddingVertical: 12, textAlignVertical: 'top' },
+    fieldRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+    field: { flexGrow: 1, flexBasis: 90, minWidth: 90 },
     primary: { marginTop: spacing.md, backgroundColor: colors.accent, borderRadius: radius.sm, minHeight: 48, alignItems: 'center', justifyContent: 'center' },
     primaryText: { color: colors.ink, fontWeight: '900' },
     secondary: { marginTop: spacing.md, minHeight: 44, borderColor: colors.gold, borderWidth: 1, alignItems: 'center', justifyContent: 'center', borderRadius: radius.md },

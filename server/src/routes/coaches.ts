@@ -1,4 +1,7 @@
 import { Router, Request, Response } from 'express';
+import fs from 'node:fs';
+import path from 'node:path';
+import multer from 'multer';
 import { ObjectId } from 'mongodb';
 import { getDb } from '../db.js';
 import { optionalAuth, requireAuth, requireCoach } from '../middleware/auth.js';
@@ -10,9 +13,35 @@ import {
   type CoachSpecialty,
   type VideoReportReason,
 } from '../types.js';
+import { notifyUserPush } from '../push.js';
 
 export const coachesRouter = Router();
 coachesRouter.use(coachClientsRouter);
+
+const MAX_COACH_VIDEO_DURATION_MS = 90_000;
+const MAX_COACH_VIDEO_BYTES = 250 * 1024 * 1024;
+const VIDEO_UPLOAD_DIR = path.join(process.cwd(), 'uploads', 'coach-videos');
+const ALLOWED_VIDEO_MIME = new Set(['video/mp4', 'video/quicktime', 'video/x-m4v', 'video/webm']);
+
+fs.mkdirSync(VIDEO_UPLOAD_DIR, { recursive: true });
+
+const videoUpload = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => cb(null, VIDEO_UPLOAD_DIR),
+    filename: (_req, file, cb) => {
+      const ext = path.extname(file.originalname).toLowerCase() || '.mp4';
+      cb(null, `${new ObjectId().toHexString()}${ext}`);
+    },
+  }),
+  limits: { fileSize: MAX_COACH_VIDEO_BYTES, files: 1 },
+  fileFilter: (_req, file, cb) => {
+    if (!ALLOWED_VIDEO_MIME.has(file.mimetype)) {
+      cb(new Error('Upload an MP4, MOV, M4V, or WebM video.'));
+      return;
+    }
+    cb(null, true);
+  },
+});
 
 function asObjectId(value: unknown): ObjectId | null {
   if (typeof value !== 'string' || !/^[a-fA-F0-9]{24}$/.test(value)) return null;
@@ -93,6 +122,17 @@ async function loadCoachVideos(coachId: string) {
   return getDb().collection('coachVideos').find({ coachId }).sort({ createdAt: -1 }).toArray();
 }
 
+function buildPublicUploadUrl(req: Request, filename: string) {
+  return `${req.protocol}://${req.get('host')}/uploads/coach-videos/${filename}`;
+}
+
+function cleanupUploadedFile(file?: Express.Multer.File) {
+  if (!file?.path) return;
+  fs.unlink(file.path, (err) => {
+    if (err) console.error('Upload cleanup error:', err);
+  });
+}
+
 function catalogProgram(doc: Record<string, unknown> & { _id: ObjectId }, coachName: string) {
   const days = Array.isArray(doc.days) ? doc.days : [];
   return {
@@ -131,6 +171,86 @@ async function loadCoachCatalog(coachId: string, coachName: string) {
   }).sort({ createdAt: -1 }).toArray();
   return docs.map((doc) => catalogProgram(doc as Record<string, unknown> & { _id: ObjectId }, coachName));
 }
+
+coachesRouter.post('/videos/upload', requireAuth, requireCoach, (req: Request, res: Response) => {
+  videoUpload.single('video')(req, res, async (uploadErr) => {
+    const file = req.file;
+    try {
+      if (uploadErr) {
+        cleanupUploadedFile(file);
+        res.status(400).json({ error: uploadErr instanceof Error ? uploadErr.message : 'Could not upload video' });
+        return;
+      }
+      if (!file) {
+        res.status(400).json({ error: 'video file is required' });
+        return;
+      }
+      const title = typeof req.body?.title === 'string' ? req.body.title.trim() : '';
+      if (!title || title.length > 120) {
+        cleanupUploadedFile(file);
+        res.status(400).json({ error: 'title is required (max 120 characters)' });
+        return;
+      }
+      const description = typeof req.body?.description === 'string' ? req.body.description.trim() : '';
+      if (description.length > 2000) {
+        cleanupUploadedFile(file);
+        res.status(400).json({ error: 'description must be 2000 characters or less' });
+        return;
+      }
+      const durationMs = Number(req.body?.durationMs);
+      if (!Number.isFinite(durationMs) || durationMs <= 0) {
+        cleanupUploadedFile(file);
+        res.status(400).json({ error: 'video duration is required' });
+        return;
+      }
+      if (durationMs > MAX_COACH_VIDEO_DURATION_MS) {
+        cleanupUploadedFile(file);
+        res.status(400).json({ error: 'Video must be 1:30 or shorter' });
+        return;
+      }
+      let exerciseTag: string | null = null;
+      const rawTag = typeof req.body?.exerciseTag === 'string' ? req.body.exerciseTag.trim() : '';
+      if (rawTag) {
+        const exerciseId = asObjectId(rawTag);
+        if (!exerciseId) {
+          cleanupUploadedFile(file);
+          res.status(400).json({ error: 'exerciseTag must be a valid exercise id' });
+          return;
+        }
+        const exercise = await getDb().collection('exercises').findOne({ _id: exerciseId, archived: { $ne: true } });
+        if (!exercise) {
+          cleanupUploadedFile(file);
+          res.status(400).json({ error: 'exerciseTag does not match an exercise' });
+          return;
+        }
+        exerciseTag = rawTag;
+      }
+      const data = {
+        coachId: req.user!.userId,
+        title,
+        description,
+        videoUrl: buildPublicUploadUrl(req, file.filename),
+        thumbnailUrl: null,
+        youtubeId: null,
+        kind: 'file' as const,
+        exerciseTag,
+        durationMs,
+        mimeType: file.mimetype,
+        originalName: file.originalname,
+        sizeBytes: file.size,
+        viewCount: 0,
+        uniqueViewerIds: [] as string[],
+        createdAt: new Date().toISOString(),
+      };
+      const result = await getDb().collection('coachVideos').insertOne(data);
+      res.status(201).json(publicVideo({ ...data, _id: result.insertedId }));
+    } catch (err) {
+      cleanupUploadedFile(file);
+      console.error('Upload coach video error:', err);
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+});
 
 coachesRouter.post('/videos', requireAuth, requireCoach, async (req: Request, res: Response) => {
   try {
@@ -449,6 +569,21 @@ coachesRouter.post('/:id/request', requireAuth, async (req: Request, res: Respon
       createdAt: new Date().toISOString(),
     };
     const result = await getDb().collection('coachRequests').insertOne(data);
+    const athleteOid = asObjectId(athleteId);
+    const athlete = athleteOid
+      ? await getDb().collection('users').findOne({ _id: athleteOid })
+      : null;
+    const athleteLabel =
+      (typeof athlete?.email === 'string' && athlete.email) ||
+      (typeof athlete?.name === 'string' && athlete.name) ||
+      'An athlete';
+    notifyUserPush({
+      userId: coachId.toHexString(),
+      pref: 'coachRequestReceived',
+      title: 'New coaching request',
+      body: `New coaching request from ${athleteLabel}`,
+      data: { type: 'coach_request_received', requestId: result.insertedId.toHexString() },
+    });
     res.status(201).json({
       id: result.insertedId.toHexString(),
       ...data,

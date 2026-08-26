@@ -1,10 +1,12 @@
-import { useRef, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { ActivityIndicator, Animated, I18nManager, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
 import { auth } from '../services/api';
 import { radius, spacing, useTheme, useThemedStyles, type ThemeColors } from '../theme';
 import { LanguagePicker } from '../components/LanguagePicker';
+import { GoogleSignInButton } from '../components/GoogleSignInButton';
+import { isGoogleAuthConfigured, useGoogleIdToken } from '../hooks/useGoogleIdToken';
 import { apiErrorMessage } from '../../i18n';
 import { COACH_SPECIALTIES, type ContactPreference, type UserRole } from '../types/models';
 import { CoachChip } from './coaches/coachUi';
@@ -32,6 +34,7 @@ export function LoginScreen({ onAuthenticated }: Props) {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const shake = useRef(new Animated.Value(0)).current;
+  const showGoogle = mode === 'login' || role === 'athlete';
 
   function showError(message: string) {
     setError(message);
@@ -171,10 +174,109 @@ export function LoginScreen({ onAuthenticated }: Props) {
             </>
           )}
         </Pressable>
+        {showGoogle ? (
+          <>
+            <View style={styles.dividerRow}>
+              <View style={styles.dividerLine} />
+              <Text style={styles.dividerText}>{t('login.or')}</Text>
+              <View style={styles.dividerLine} />
+            </View>
+            <GoogleAuthButton
+              loading={loading}
+              onAuthenticated={onAuthenticated}
+              onError={showError}
+              onStart={() => setError('')}
+              onLoadingChange={setLoading}
+            />
+          </>
+        ) : null}
         <Text style={styles.footnote}>{t('login.footnote')}</Text>
         <LanguagePicker compact />
       </ScrollView>
     </KeyboardAvoidingView>
+  );
+}
+
+function GoogleAuthButton({
+  loading,
+  onAuthenticated,
+  onError,
+  onStart,
+  onLoadingChange,
+}: {
+  loading: boolean;
+  onAuthenticated: (role: UserRole) => void;
+  onError: (message: string) => void;
+  onStart: () => void;
+  onLoadingChange: (loading: boolean) => void;
+}) {
+  const { t, i18n } = useTranslation();
+  const configured = isGoogleAuthConfigured();
+
+  const handleIdToken = useCallback(async (idToken: string) => {
+    onLoadingChange(true);
+    try {
+      const session = await auth.loginWithGoogle(idToken);
+      onAuthenticated(session.role);
+    } catch (requestError) {
+      onError(apiErrorMessage(requestError, t('login.googleFailed')));
+    } finally {
+      onLoadingChange(false);
+    }
+  }, [onAuthenticated, onError, onLoadingChange, t]);
+
+  const handleAuthError = useCallback((message?: string) => {
+    onError(message || t('login.googleFailed'));
+  }, [onError, t]);
+
+  if (!configured) {
+    return (
+      <GoogleSignInButton
+        label={t('login.continueWithGoogle')}
+        disabled={loading}
+        onPress={() => onError(t('login.googleNotConfigured'))}
+      />
+    );
+  }
+
+  return (
+    <GoogleAuthConfigured
+      loading={loading}
+      language={i18n.language}
+      label={t('login.continueWithGoogle')}
+      onIdToken={(idToken) => { void handleIdToken(idToken); }}
+      onError={handleAuthError}
+      onStart={onStart}
+    />
+  );
+}
+
+function GoogleAuthConfigured({
+  loading,
+  language,
+  label,
+  onIdToken,
+  onError,
+  onStart,
+}: {
+  loading: boolean;
+  language?: string;
+  label: string;
+  onIdToken: (idToken: string) => void;
+  onError: (message?: string) => void;
+  onStart: () => void;
+}) {
+  const { ready, prompt } = useGoogleIdToken({ language, onIdToken, onError });
+  return (
+    <GoogleSignInButton
+      label={label}
+      loading={loading}
+      disabled={!ready || loading}
+      onPress={() => {
+        onStart();
+        void prompt();
+      }}
+    />
   );
 }
 
@@ -205,6 +307,9 @@ function createStyles(colors: ThemeColors) {
   submit: { minHeight: 52, backgroundColor: colors.gold, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 10, marginTop: spacing.md, borderRadius: radius.sm, paddingHorizontal: 12 },
   submitDisabled: { opacity: 0.65 },
   submitText: { color: colors.ink, fontWeight: '900', letterSpacing: 0.6, textAlign: 'center' },
-    footnote: { color: colors.muted, fontSize: 12, textAlign: 'center', marginTop: spacing.md },
+  dividerRow: { flexDirection: 'row', alignItems: 'center', gap: 12, marginTop: spacing.md },
+  dividerLine: { flex: 1, height: StyleSheet.hairlineWidth, backgroundColor: colors.border },
+  dividerText: { color: colors.muted, fontSize: 12, fontWeight: '700', letterSpacing: 1, textTransform: 'uppercase' },
+  footnote: { color: colors.muted, fontSize: 12, textAlign: 'center', marginTop: spacing.md },
   });
 }

@@ -19,6 +19,9 @@ export type SetLog = {
   distanceKm?: number | null;
   intensity?: CardioIntensity | null;
   caloriesBurned?: number | null;
+  routePoints?: { lat: number; lng: number; timestamp: number }[];
+  distanceSource?: 'gps' | 'manual' | null;
+  hasRoute?: boolean;
   avgHeartRate?: number | null;
   completed?: boolean;
   notes?: string;
@@ -134,6 +137,8 @@ export type WorkoutSession = {
   dayLabel?: string;
   startedAt: string;
   completedAt?: string;
+  endedAt?: string | null;
+  durationMin?: number;
   totalVolume: number;
   notes?: string;
   sets?: SetLog[];
@@ -190,6 +195,35 @@ export type CoachProfile = {
   phone?: string;
 };
 
+export type DailyMotivationPrefs = {
+  enabled: boolean;
+  hour: number;
+  minute: number;
+};
+
+export type WaterMealPrefs = {
+  enabled: boolean;
+  intervalHours: number;
+};
+
+export type NotificationPrefs = {
+  dailyMotivation: DailyMotivationPrefs;
+  streakAtRisk: { enabled: boolean };
+  waterMeal: WaterMealPrefs;
+  coachRequestResponse: { enabled: boolean };
+  planAssigned: { enabled: boolean };
+  coachRequestReceived: { enabled: boolean };
+};
+
+export const DEFAULT_NOTIFICATION_PREFS: NotificationPrefs = {
+  dailyMotivation: { enabled: true, hour: 8, minute: 0 },
+  streakAtRisk: { enabled: true },
+  waterMeal: { enabled: false, intervalHours: 2 },
+  coachRequestResponse: { enabled: true },
+  planAssigned: { enabled: true },
+  coachRequestReceived: { enabled: true },
+};
+
 export type UserProfile = {
   id: string;
   email: string;
@@ -198,6 +232,7 @@ export type UserProfile = {
   createdAt: string;
   role: UserRole;
   coachProfile: CoachProfile | null;
+  notificationPrefs: NotificationPrefs;
 };
 
 export type PublicCoach = {
@@ -290,6 +325,7 @@ export type CoachClientDetail = {
   coachingStartedAt: string;
   program: Program | null;
   nutritionGoals: NutritionGoals | null;
+  nutritionPlan: NutritionPlan | null;
   recentWorkouts: CoachClientWorkout[];
   recentNutritionLogs: CoachClientNutritionDay[];
   adherence: {
@@ -334,6 +370,40 @@ export type NutritionGoals = {
   updatedAt: string;
 };
 
+export type NutritionPlan = {
+  id: string;
+  coachId: string;
+  coachName: string;
+  visibility: 'client' | 'public';
+  assignedToUserId: string | null;
+  title: string;
+  description: string;
+  dailyCalories: number;
+  dailyProtein: number;
+  dailyCarbs: number;
+  dailyFat: number;
+  dailyWater: number;
+  goal: NutritionGoalKind;
+  mealPlan: string;
+  notes: string;
+  active: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type NutritionPlanInput = {
+  title: string;
+  description?: string;
+  dailyCalories: number;
+  dailyProtein: number;
+  dailyCarbs?: number;
+  dailyFat?: number;
+  dailyWater: number;
+  goal: NutritionGoalKind;
+  mealPlan?: string;
+  notes?: string;
+};
+
 export type NutritionMeal = {
   _id: string;
   name: string;
@@ -351,6 +421,7 @@ export type NutritionDayLog = {
   createdAt?: string;
   updatedAt?: string;
   goals: NutritionGoals | null;
+  nutritionPlan: NutritionPlan | null;
   needsOnboarding: boolean;
 };
 
