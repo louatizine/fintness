@@ -403,3 +403,43 @@ coachClientsRouter.post('/me/clients/:athleteId/nutrition-plan', requireAuth, re
     res.status(500).json({ error: 'Internal server error' });
   }
 });
+
+coachClientsRouter.post('/me/clients/:athleteId/unassign-program', requireAuth, requireCoach, async (req: Request, res: Response) => {
+  try {
+    const coachId = req.user!.userId;
+    const athleteId = String(req.params.athleteId);
+    const coaching = await requireAcceptedCoaching(coachId, athleteId);
+    if (!coaching) {
+      res.status(403).json({ error: 'Accepted coaching relationship required' });
+      return;
+    }
+    const programDoc = await activeProgramFor(athleteId);
+    if (!programDoc) {
+      res.status(404).json({ error: 'Athlete has no active training plan' });
+      return;
+    }
+    if (programDoc.createdByCoachId !== coachId) {
+      res.status(403).json({ error: 'You can only unassign a plan you assigned to this athlete' });
+      return;
+    }
+    const now = new Date().toISOString();
+    await getDb().collection('userPrograms').updateMany(
+      { userId: athleteId, active: true },
+      { $set: { active: false, endedAt: now } }
+    );
+    const coach = await getDb().collection('users').findOne({ _id: asObjectId(coachId)! });
+    const coachName = displayLabelOf(coach as { coachProfile?: { displayName?: string }; email?: string } | null);
+    const planName = typeof programDoc.name === 'string' ? programDoc.name : 'your training plan';
+    notifyUserPush({
+      userId: athleteId,
+      pref: 'planAssigned',
+      title: 'Training plan removed',
+      body: `Coach ${coachName} removed “${planName}”`,
+      data: { type: 'plan_unassigned', kind: 'training', programId: programDoc._id.toHexString() },
+    });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Unassign client program error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});

@@ -6,12 +6,16 @@ import { users } from '../../services/api';
 import { ScreenSkeleton } from '../../components/Skeleton';
 import { radius, spacing, useTheme, useThemedStyles, type ThemeColors } from '../../theme';
 import { apiErrorMessage } from '../../../i18n';
-import { COACH_SPECIALTIES, type ContactPreference } from '../../types/models';
+import { COACH_SPECIALTIES, type ContactPreference, type UserRole } from '../../types/models';
 import { CoachBackRow, CoachChip } from './coachUi';
 
 const PREFS: ContactPreference[] = ['app', 'email', 'phone'];
 
-export function BecomeCoachScreen() {
+export function BecomeCoachScreen({
+  onRoleChange,
+}: {
+  onRoleChange?: (role: UserRole) => void;
+} = {}) {
   const { t } = useTranslation();
   const navigation = useNavigation();
   const { colors } = useTheme();
@@ -28,15 +32,14 @@ export function BecomeCoachScreen() {
   const [error, setError] = useState('');
   const [info, setInfo] = useState('');
   const [editing, setEditing] = useState(false);
+  const [wasAthlete, setWasAthlete] = useState(false);
 
   const load = useCallback(async () => {
     try {
       const profile = await users.getMe();
       setEmail(profile.email);
-      if (profile.role !== 'coach') {
-        navigation.goBack();
-        return;
-      }
+      const isCoach = profile.role === 'coach';
+      setWasAthlete(!isCoach);
       if (profile.coachProfile) {
         setEditing(true);
         setDisplayName(profile.coachProfile.displayName);
@@ -46,13 +49,15 @@ export function BecomeCoachScreen() {
         setContactPreference(profile.coachProfile.contactPreference);
         setEmail(profile.coachProfile.email || profile.email);
         setPhone(profile.coachProfile.phone || '');
+      } else if (profile.name) {
+        setDisplayName(profile.name);
       }
     } catch (err) {
       setError(apiErrorMessage(err, t('coaches.loadFailed')));
     } finally {
       setLoading(false);
     }
-  }, [navigation, t]);
+  }, [t]);
 
   useFocusEffect(useCallback(() => { void load(); }, [load]));
 
@@ -65,7 +70,7 @@ export function BecomeCoachScreen() {
     setError('');
     setInfo('');
     try {
-      await users.becomeCoach({
+      const profile = await users.becomeCoach({
         displayName: displayName.trim(),
         bio: bio.trim(),
         specialties,
@@ -74,7 +79,10 @@ export function BecomeCoachScreen() {
         email: email.trim(),
         phone: phone.trim(),
       });
-      setInfo(t('coaches.profileSaved'));
+      onRoleChange?.(profile.role);
+      setEditing(true);
+      setWasAthlete(false);
+      setInfo(wasAthlete ? t('coaches.becameCoach') : t('coaches.profileSaved'));
     } catch (err) {
       setError(apiErrorMessage(err, t('coaches.saveFailed')));
     } finally {
@@ -88,8 +96,8 @@ export function BecomeCoachScreen() {
     <ScrollView style={styles.screen} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
       <CoachBackRow label={t('common.back')} onPress={() => navigation.goBack()} />
       <Text style={styles.eyebrow}>{t('coaches.becomeEyebrow')}</Text>
-      <Text style={styles.title}>{t('coaches.editProfile')}</Text>
-      <Text style={styles.help}>{t('coaches.editHelp')}</Text>
+      <Text style={styles.title}>{editing || !wasAthlete ? t('coaches.editProfile') : t('coaches.becomeCoach')}</Text>
+      <Text style={styles.help}>{editing || !wasAthlete ? t('coaches.editHelp') : t('coaches.becomeHelp')}</Text>
       <Text style={styles.label}>{t('coaches.displayName')}</Text>
       <TextInput value={displayName} onChangeText={setDisplayName} placeholder={t('coaches.displayNamePlaceholder')} placeholderTextColor={colors.muted} style={styles.input} />
       <Text style={styles.label}>{t('coaches.bio')}</Text>
@@ -122,7 +130,9 @@ export function BecomeCoachScreen() {
       ) : null}
       <Text style={styles.help}>{t('coaches.privacyNote')}</Text>
       <Pressable onPress={() => void save()} disabled={saving} style={[styles.primary, saving && styles.disabled]}>
-        {saving ? <ActivityIndicator color={colors.ink} /> : <Text style={styles.primaryText}>{t('common.save')}</Text>}
+        {saving
+          ? <ActivityIndicator color={colors.ink} />
+          : <Text style={styles.primaryText}>{wasAthlete && !editing ? t('coaches.becomeCoachCta') : t('common.save')}</Text>}
       </Pressable>
       {info ? <Text style={styles.message}>{info}</Text> : null}
       {error ? <Text style={styles.error}>{error}</Text> : null}

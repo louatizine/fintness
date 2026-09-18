@@ -42,11 +42,13 @@ function typeLabel(type: ProgramType, t: (key: string) => string) {
 export function ProgramPicker({
   library,
   activeProgramId,
+  activeCoachName = null,
   onClose,
   onChanged,
 }: {
   library: Exercise[];
   activeProgramId: string | null;
+  activeCoachName?: string | null;
   onClose: () => void;
   onChanged: () => void;
 }) {
@@ -259,24 +261,74 @@ export function ProgramPicker({
       <Text style={styles.kicker}>{t('programs.kicker')}</Text>
       <Text style={styles.title}>{t('programs.title')}</Text>
       <Text style={styles.help}>{t('programs.help')}</Text>
-      {list.map((program) => {
-        const active = program.id === activeProgramId;
-        return (
-          <View key={program.id} style={styles.card}>
-            <Text style={styles.kicker}>{typeLabel(program.type, t)}{program.assignedByCoachName ? ` · ${t('programs.assignedByCoach', { name: program.assignedByCoachName })}` : program.isCustom ? ` · ${t('programs.yours')}` : ''}</Text>
-            <Text style={styles.cardTitle}>{program.name}</Text>
-            <Text style={styles.help}>{program.description}</Text>
-            <Text style={styles.slotMeta}>{t('programs.daysPreview', { n: program.daysPerWeek, preview: dayPreview(program) })}</Text>
-            <Pressable
-              onPress={() => void assign(program.id)}
-              disabled={saving || active}
-              style={[styles.primary, (saving || active) && styles.disabled]}
-            >
-              <Text style={styles.primaryText}>{active ? t('programs.assigned') : t('programs.assign')}</Text>
-            </Pressable>
+
+      {activeCoachName ? (
+        <View style={styles.coachBanner}>
+          <View style={styles.coachBannerTop}>
+            <Ionicons name="person" size={16} color={colors.gold} />
+            <Text style={styles.coachBannerKicker}>{t('programs.coachActiveKicker')}</Text>
           </View>
-        );
-      })}
+          <Text style={styles.coachBannerText}>
+            {t('programs.coachActiveHelp', { name: activeCoachName })}
+          </Text>
+        </View>
+      ) : null}
+
+      {(() => {
+        const coachPlans = list.filter((program) => Boolean(program.assignedByCoachName));
+        const otherPlans = list.filter((program) => !program.assignedByCoachName);
+        const sections: { key: string; title: string; items: Program[] }[] = [];
+        if (coachPlans.length) {
+          sections.push({ key: 'coach', title: t('programs.fromCoach'), items: coachPlans });
+        }
+        if (otherPlans.length) {
+          sections.push({
+            key: 'library',
+            title: coachPlans.length ? t('programs.otherPlans') : t('programs.libraryPlans'),
+            items: otherPlans,
+          });
+        }
+
+        return sections.map((section) => (
+          <View key={section.key}>
+            <Text style={styles.sectionLabel}>{section.title}</Text>
+            {section.items.map((program) => {
+              const active = program.id === activeProgramId;
+              const fromCoach = Boolean(program.assignedByCoachName);
+              return (
+                <View key={program.id} style={[styles.card, fromCoach && styles.coachCard]}>
+                  {fromCoach ? (
+                    <View style={styles.coachBadgeRow}>
+                      <Ionicons name="person" size={14} color={colors.gold} />
+                      <Text style={styles.kicker}>
+                        {t('programs.assignedByCoach', { name: program.assignedByCoachName })}
+                      </Text>
+                    </View>
+                  ) : (
+                    <Text style={styles.kicker}>
+                      {typeLabel(program.type, t)}{program.isCustom ? ` · ${t('programs.yours')}` : ''}
+                    </Text>
+                  )}
+                  <Text style={styles.cardTitle}>{program.name}</Text>
+                  {!fromCoach ? (
+                    <Text style={styles.help}>{program.description}</Text>
+                  ) : program.description ? (
+                    <Text style={styles.help}>{program.description}</Text>
+                  ) : null}
+                  <Text style={styles.slotMeta}>{t('programs.daysPreview', { n: program.daysPerWeek, preview: dayPreview(program) })}</Text>
+                  <Pressable
+                    onPress={() => void assign(program.id)}
+                    disabled={saving || active}
+                    style={[styles.primary, (saving || active) && styles.disabled]}
+                  >
+                    <Text style={styles.primaryText}>{active ? t('programs.assigned') : t('programs.assign')}</Text>
+                  </Pressable>
+                </View>
+              );
+            })}
+          </View>
+        ));
+      })()}
       {error ? <Text style={styles.error}>{error}</Text> : null}
       <Pressable onPress={() => setBuilding(true)} style={styles.secondary}>
         <Ionicons name="add" size={18} color={colors.gold} />
@@ -298,7 +350,21 @@ function createStyles(colors: ThemeColors) {
   kicker: { color: colors.gold, fontSize: 11, fontWeight: '800', letterSpacing: 1.5 },
   title: { color: colors.text, fontSize: 26, fontWeight: '800', marginTop: 6, marginBottom: spacing.sm },
   help: { color: colors.muted, fontSize: 13, lineHeight: 18, marginBottom: spacing.sm },
+  sectionLabel: { color: colors.muted, fontSize: 12, fontWeight: '800', letterSpacing: 1, marginTop: spacing.md, marginBottom: 4 },
+  coachBanner: {
+    backgroundColor: colors.accentMuted,
+    borderColor: colors.gold,
+    borderWidth: 1,
+    borderRadius: radius.md,
+    padding: spacing.md,
+    marginBottom: spacing.sm,
+  },
+  coachBannerTop: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 6 },
+  coachBannerKicker: { color: colors.gold, fontSize: 11, fontWeight: '800', letterSpacing: 1.5 },
+  coachBannerText: { color: colors.text, fontSize: 13, lineHeight: 18, fontWeight: '600' },
   card: { backgroundColor: colors.surface, borderColor: colors.border, borderWidth: 1, borderRadius: radius.md, padding: spacing.md, marginTop: spacing.sm },
+  coachCard: { borderColor: colors.gold, backgroundColor: colors.accentMuted },
+  coachBadgeRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   cardTitle: { color: colors.text, fontSize: 20, fontWeight: '800', marginTop: 4, marginBottom: 6 },
   label: { color: colors.muted, fontSize: 11, fontWeight: '800', letterSpacing: 1, marginBottom: 7, marginTop: spacing.sm },
   input: { backgroundColor: colors.background, borderColor: colors.border, borderWidth: 1, color: colors.text, minHeight: 46, paddingHorizontal: 12, fontSize: 15, borderRadius: radius.sm },

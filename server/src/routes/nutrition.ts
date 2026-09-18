@@ -328,12 +328,32 @@ nutritionRouter.get('/goals', async (req: Request, res: Response) => {
 
 nutritionRouter.post('/goals/calculate', async (req: Request, res: Response) => {
   try {
-    const age = asFiniteNumber(req.body?.age);
-    const weightKg = asFiniteNumber(req.body?.weightKg);
-    const heightCm = asFiniteNumber(req.body?.heightCm);
-    const sex = parseSex(req.body?.sex);
+    const userId = asObjectId(req.user!.userId);
+    const profile = userId
+      ? await getDb().collection('users').findOne(
+        { _id: userId },
+        { projection: { age: 1, sex: 1, weightKg: 1, heightCm: 1 } }
+      )
+      : null;
+
+    const bodyAge = req.body?.age !== undefined && req.body?.age !== null && req.body?.age !== ''
+      ? asFiniteNumber(req.body.age)
+      : null;
+    const bodyWeight = req.body?.weightKg !== undefined && req.body?.weightKg !== null && req.body?.weightKg !== ''
+      ? asFiniteNumber(req.body.weightKg)
+      : null;
+    const bodyHeight = req.body?.heightCm !== undefined && req.body?.heightCm !== null && req.body?.heightCm !== ''
+      ? asFiniteNumber(req.body.heightCm)
+      : null;
+    const bodySex = parseSex(req.body?.sex);
+
+    const age = bodyAge ?? (typeof profile?.age === 'number' ? profile.age : null);
+    const weightKg = bodyWeight ?? (typeof profile?.weightKg === 'number' ? profile.weightKg : null);
+    const heightCm = bodyHeight ?? (typeof profile?.heightCm === 'number' ? profile.heightCm : null);
+    const sex = bodySex ?? (profile?.sex === 'male' || profile?.sex === 'female' ? profile.sex : null);
     const activityLevel = parseActivity(req.body?.activityLevel);
     const goal = req.body?.goal;
+
     if (
       age === null || age < 13 || age > 100 ||
       weightKg === null || weightKg < 30 || weightKg > 400 ||
@@ -341,7 +361,7 @@ nutritionRouter.post('/goals/calculate', async (req: Request, res: Response) => 
       !sex || !activityLevel || !isGoal(goal)
     ) {
       res.status(400).json({
-        error: 'age, sex (male|female), weightKg, heightCm, activityLevel (sedentary|light|moderate|active|very_active) and goal (cut|maintain|bulk) are required',
+        error: 'age, sex (male|female), weightKg, heightCm, activityLevel (sedentary|light|moderate|active|very_active) and goal (cut|maintain|bulk) are required (missing fields can come from your profile)',
       });
       return;
     }

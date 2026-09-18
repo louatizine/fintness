@@ -12,6 +12,12 @@ import {
 export const usersRouter = Router();
 usersRouter.use(requireAuth);
 
+// FOLLOW-UP (pre-public launch / App Store & Play compliance):
+// Implement DELETE /users/me with full cascade — workouts, nutrition logs/goals/plans,
+// coach relationships & requests, coach videos/views/reports, push tokens, programs
+// owned or assigned, SecureStore session invalidation on client. Do not ship publicly
+// without account deletion.
+
 function asObjectId(value: string): ObjectId | null {
   if (!/^[a-fA-F0-9]{24}$/.test(value)) return null;
   try {
@@ -33,11 +39,28 @@ function isExpoPushToken(token: string): boolean {
   );
 }
 
+function parseSex(value: unknown): 'male' | 'female' | null {
+  return value === 'male' || value === 'female' ? value : null;
+}
+
+function parseWeightUnit(value: unknown): 'kg' | 'lb' | null {
+  return value === 'kg' || value === 'lb' ? value : null;
+}
+
+function hasPasswordSet(doc: { password?: unknown }): boolean {
+  return typeof doc.password === 'string' && doc.password.length > 0;
+}
+
 function publicProfile(doc: {
   _id: ObjectId;
   email?: string;
+  name?: string;
+  password?: string;
   weightUnit?: string;
   weightKg?: number | null;
+  age?: number | null;
+  sex?: string | null;
+  heightCm?: number | null;
   createdAt?: string;
   role?: string;
   coachProfile?: {
@@ -56,8 +79,13 @@ function publicProfile(doc: {
   return {
     id: doc._id.toHexString(),
     email: doc.email ?? '',
-    weightUnit: doc.weightUnit ?? 'kg',
+    name: typeof doc.name === 'string' ? doc.name : '',
+    weightUnit: doc.weightUnit === 'lb' ? 'lb' as const : 'kg' as const,
     weightKg: typeof doc.weightKg === 'number' ? doc.weightKg : null,
+    age: typeof doc.age === 'number' ? doc.age : null,
+    sex: doc.sex === 'male' || doc.sex === 'female' ? doc.sex : null,
+    heightCm: typeof doc.heightCm === 'number' ? doc.heightCm : null,
+    hasPassword: hasPasswordSet(doc),
     createdAt: doc.createdAt ?? '',
     role,
     coachProfile: role === 'coach' && raw
@@ -105,12 +133,33 @@ usersRouter.patch('/me', async (req: Request, res: Response) => {
     const body = req.body ?? {};
     const hasWeight = body.weightKg !== undefined && body.weightKg !== null && body.weightKg !== '';
     const hasPrefs = body.notificationPrefs !== undefined;
-    if (!hasWeight && !hasPrefs) {
-      res.status(400).json({ error: 'Provide weightKg and/or notificationPrefs' });
+    const hasName = body.name !== undefined;
+    const hasUnit = body.weightUnit !== undefined;
+    const hasAge = body.age !== undefined;
+    const hasSex = body.sex !== undefined;
+    const hasHeight = body.heightCm !== undefined;
+
+    if (!hasWeight && !hasPrefs && !hasName && !hasUnit && !hasAge && !hasSex && !hasHeight) {
+      res.status(400).json({
+        error: 'Provide at least one of: name, weightKg, weightUnit, age, sex, heightCm, notificationPrefs',
+      });
       return;
     }
 
     const $set: Record<string, unknown> = { updatedAt: new Date().toISOString() };
+
+    if (hasName) {
+      if (typeof body.name !== 'string') {
+        res.status(400).json({ error: 'name must be a string' });
+        return;
+      }
+      const name = body.name.trim();
+      if (name.length > 80) {
+        res.status(400).json({ error: 'name must be 80 characters or less' });
+        return;
+      }
+      $set.name = name;
+    }
 
     if (hasWeight) {
       const weightKg = asFiniteNumber(body.weightKg);
@@ -119,6 +168,54 @@ usersRouter.patch('/me', async (req: Request, res: Response) => {
         return;
       }
       $set.weightKg = weightKg;
+    }
+
+    if (hasUnit) {
+      const weightUnit = parseWeightUnit(body.weightUnit);
+      if (!weightUnit) {
+        res.status(400).json({ error: 'weightUnit must be kg or lb' });
+        return;
+      }
+      $set.weightUnit = weightUnit;
+    }
+
+    if (hasAge) {
+      if (body.age === null || body.age === '') {
+        $set.age = null;
+      } else {
+        const age = asFiniteNumber(body.age);
+        if (age === null || !Number.isInteger(age) || age < 13 || age > 100) {
+          res.status(400).json({ error: 'age must be an integer between 13 and 100' });
+          return;
+        }
+        $set.age = age;
+      }
+    }
+
+    if (hasSex) {
+      if (body.sex === null || body.sex === '') {
+        $set.sex = null;
+      } else {
+        const sex = parseSex(body.sex);
+        if (!sex) {
+          res.status(400).json({ error: 'sex must be male or female' });
+          return;
+        }
+        $set.sex = sex;
+      }
+    }
+
+    if (hasHeight) {
+      if (body.heightCm === null || body.heightCm === '') {
+        $set.heightCm = null;
+      } else {
+        const heightCm = asFiniteNumber(body.heightCm);
+        if (heightCm === null || heightCm < 100 || heightCm > 250) {
+          res.status(400).json({ error: 'heightCm must be a number between 100 and 250' });
+          return;
+        }
+        $set.heightCm = heightCm;
+      }
     }
 
     if (hasPrefs) {
@@ -215,10 +312,6 @@ usersRouter.post('/become-coach', async (req: Request, res: Response) => {
       res.status(404).json({ error: 'User not found' });
       return;
     }
-    if (user.role !== 'coach') {
-      res.status(403).json({ error: 'Create a coach account at sign up to list as a coach' });
-      return;
-    }
     const parsed = parseCoachProfile((req.body ?? {}) as Record<string, unknown>, user.email ?? '');
     if (parsed.error || !parsed.profile) {
       res.status(400).json({ error: parsed.error ?? 'Invalid coach profile' });
@@ -226,7 +319,13 @@ usersRouter.post('/become-coach', async (req: Request, res: Response) => {
     }
     const result = await getDb().collection('users').findOneAndUpdate(
       { _id: id },
-      { $set: { coachProfile: parsed.profile, updatedAt: new Date().toISOString() } },
+      {
+        $set: {
+          role: 'coach',
+          coachProfile: parsed.profile,
+          updatedAt: new Date().toISOString(),
+        },
+      },
       { returnDocument: 'after' }
     );
     if (!result) {

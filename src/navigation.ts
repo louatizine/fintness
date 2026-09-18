@@ -18,6 +18,11 @@ export type TodayStackParamList = {
     dayLabel?: string;
     intensity?: CardioIntensity;
   };
+  FormCheckRecord: {
+    exerciseId: string;
+    exerciseName: string;
+    coachName: string | null;
+  };
 };
 
 export type HistoryStackParamList = {
@@ -45,5 +50,5 @@ export type RootTabs = {
   History: NavigatorScreenParams<HistoryStackParamList> | undefined;
   Progress: undefined;
   Coaches: NavigatorScreenParams<CoachesStackParamList> | undefined;
-  Settings: undefined;
+  Profile: undefined;
 };

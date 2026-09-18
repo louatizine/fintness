@@ -16,6 +16,9 @@
           "en",
           "fr",
           "ar"
+        ],
+        "LSApplicationQueriesSchemes": [
+          "whatsapp"
         ]
       }
     },
@@ -58,6 +61,14 @@
         "expo-image-picker",
         {
           "photosPermission": "Allow Fintness to access your videos so coaches can upload short coaching clips."
+        }
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow Fintness to record a short form-check video for your coach.",
+          "microphonePermission": "Allow Fintness to include audio in form-check videos.",
+          "recordAudioAndroid": true
         }
       ],
       "expo-web-browser",

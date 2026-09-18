@@ -11,11 +11,12 @@ import * as Notifications from 'expo-notifications';
 import { I18nextProvider, useTranslation } from 'react-i18next';
 import { TodayScreen } from './src/screens/TodayScreen';
 import { RunTrackingScreen } from './src/screens/RunTrackingScreen';
+import { FormCheckRecordScreen } from './src/screens/FormCheckRecordScreen';
 import { NutritionScreen } from './src/screens/NutritionScreen';
 import { HistoryScreen } from './src/screens/HistoryScreen';
 import { CardioRouteScreen } from './src/screens/CardioRouteScreen';
 import { ProgressScreen } from './src/screens/ProgressScreen';
-import { SettingsScreen } from './src/screens/OtherScreens';
+import { ProfileScreen } from './src/screens/OtherScreens';
 import { CoachDirectoryScreen } from './src/screens/coaches/CoachDirectoryScreen';
 import { CoachProfileScreen } from './src/screens/coaches/CoachProfileScreen';
 import { BecomeCoachScreen } from './src/screens/coaches/BecomeCoachScreen';
@@ -52,10 +53,16 @@ const TAB_ICONS = {
   History: 'calendar-outline',
   Progress: 'stats-chart-outline',
   Coaches: 'people-outline',
-  Settings: 'settings-outline',
+  Profile: 'person-outline',
 } as const;
 
-function CoachesNavigator({ isCoach }: { isCoach: boolean }) {
+function CoachesNavigator({
+  isCoach,
+  onRoleChange,
+}: {
+  isCoach: boolean;
+  onRoleChange?: (role: UserRole) => void;
+}) {
   return (
     <CoachStack.Navigator
       initialRouteName={isCoach ? 'CoachHome' : 'CoachDirectory'}
@@ -64,7 +71,9 @@ function CoachesNavigator({ isCoach }: { isCoach: boolean }) {
       <CoachStack.Screen name="CoachHome" component={CoachHomeScreen} />
       <CoachStack.Screen name="CoachDirectory" component={CoachDirectoryScreen} />
       <CoachStack.Screen name="CoachProfile" component={CoachProfileScreen} />
-      <CoachStack.Screen name="BecomeCoach" component={BecomeCoachScreen} />
+      <CoachStack.Screen name="BecomeCoach">
+        {() => <BecomeCoachScreen onRoleChange={onRoleChange} />}
+      </CoachStack.Screen>
       <CoachStack.Screen name="CoachInbox" component={CoachInboxScreen} />
       <CoachStack.Screen name="CoachClients" component={CoachClientsScreen} />
       <CoachStack.Screen name="CoachClientDetail" component={CoachClientDetailScreen} />
@@ -81,6 +90,7 @@ function TodayNavigator() {
     <TodayStack.Navigator screenOptions={{ headerShown: false, animation: 'fade' }}>
       <TodayStack.Screen name="TodayHome" component={TodayScreen} />
       <TodayStack.Screen name="RunTracking" component={RunTrackingScreen} />
+      <TodayStack.Screen name="FormCheckRecord" component={FormCheckRecordScreen} />
     </TodayStack.Navigator>
   );
 }
@@ -94,7 +104,15 @@ function HistoryNavigator() {
   );
 }
 
-function AppTabs({ onLogout, role }: { onLogout: () => void; role: UserRole }) {
+function AppTabs({
+  onLogout,
+  role,
+  onRoleChange,
+}: {
+  onLogout: () => void;
+  role: UserRole;
+  onRoleChange: (role: UserRole) => void;
+}) {
   const { t } = useTranslation();
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
@@ -106,7 +124,7 @@ function AppTabs({ onLogout, role }: { onLogout: () => void; role: UserRole }) {
       initialRouteName={isCoach ? 'Coaches' : 'Today'}
       screenOptions={({ route }) => {
         const nested = getFocusedRouteNameFromRoute(route);
-        const hideTab = nested === 'RunTracking' || nested === 'CardioRoute';
+        const hideTab = nested === 'RunTracking' || nested === 'FormCheckRecord' || nested === 'CardioRoute';
         return {
         headerShown: false,
         animation: 'fade',
@@ -156,10 +174,10 @@ function AppTabs({ onLogout, role }: { onLogout: () => void; role: UserRole }) {
         name="Coaches"
         options={{ title: isCoach ? t('tabs.coachSpace') : t('tabs.coaches') }}
       >
-        {() => <CoachesNavigator isCoach={isCoach} />}
+        {() => <CoachesNavigator isCoach={isCoach} onRoleChange={onRoleChange} />}
       </Tabs.Screen>
-      <Tabs.Screen name="Settings" options={{ title: t('tabs.settings') }}>
-        {() => <SettingsScreen onLogout={onLogout} />}
+      <Tabs.Screen name="Profile" options={{ title: t('tabs.profile') }}>
+        {() => <ProfileScreen onLogout={onLogout} onRoleChange={onRoleChange} />}
       </Tabs.Screen>
     </Tabs.Navigator>
   );
@@ -186,11 +204,13 @@ function AppShell({
   role,
   onAuthenticated,
   onLogout,
+  onRoleChange,
 }: {
   authenticated: boolean;
   role: UserRole;
   onAuthenticated: (role: UserRole) => void;
   onLogout: () => void;
+  onRoleChange: (role: UserRole) => void;
 }) {
   const { colors, resolved } = useTheme();
   const appState = useRef(AppState.currentState);
@@ -238,7 +258,7 @@ function AppShell({
       <ThemedStatusBar />
       {authenticated ? (
         <NavigationContainer theme={navTheme}>
-          <AppTabs onLogout={onLogout} role={role} />
+          <AppTabs onLogout={onLogout} role={role} onRoleChange={onRoleChange} />
         </NavigationContainer>
       ) : (
         <LoginScreen onAuthenticated={onAuthenticated} />
@@ -281,6 +301,7 @@ function AppBootstrap() {
           setRole(nextRole);
           setAuthenticated(true);
         }}
+        onRoleChange={setRole}
         onLogout={() => {
           void (async () => {
             await unregisterPushTokenFromServer().catch(() => undefined);

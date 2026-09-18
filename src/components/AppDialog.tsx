@@ -9,11 +9,11 @@ type Props = {
   title: string;
   body?: string;
   confirmLabel: string;
-  cancelLabel: string;
+  cancelLabel?: string;
   tone?: DialogTone;
   icon?: keyof typeof Ionicons.glyphMap;
   onConfirm: () => void;
-  onCancel: () => void;
+  onCancel?: () => void;
 };
 
 export function AppDialog({
@@ -31,11 +31,12 @@ export function AppDialog({
   const styles = useThemedStyles(createStyles);
   const accent = tone === 'danger' ? colors.danger : tone === 'success' ? colors.success : colors.gold;
   const glyph = icon ?? (tone === 'danger' ? 'warning-outline' : tone === 'success' ? 'checkmark-circle-outline' : 'help-circle-outline');
+  const dismiss = onCancel ?? onConfirm;
 
   return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onCancel}>
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={dismiss}>
       <View style={styles.backdrop}>
-        <Pressable style={StyleSheet.absoluteFill} onPress={onCancel} />
+        <Pressable style={StyleSheet.absoluteFill} onPress={dismiss} />
         <View style={styles.dialog}>
           <View style={[styles.iconWrap, { backgroundColor: withAlpha(accent, 0.16), borderColor: withAlpha(accent, 0.42) }]}>
             <Ionicons name={glyph} size={26} color={accent} />
@@ -43,10 +44,12 @@ export function AppDialog({
           <Text style={styles.title}>{title}</Text>
           {body ? <Text style={styles.body}>{body}</Text> : null}
           <View style={styles.actions}>
-            <Pressable onPress={onCancel} style={styles.cancel}>
-              <Text style={styles.cancelText}>{cancelLabel}</Text>
-            </Pressable>
-            <Pressable onPress={onConfirm} style={[styles.confirm, { backgroundColor: accent }]}>
+            {cancelLabel ? (
+              <Pressable onPress={dismiss} style={styles.cancel}>
+                <Text style={styles.cancelText}>{cancelLabel}</Text>
+              </Pressable>
+            ) : null}
+            <Pressable onPress={onConfirm} style={[styles.confirm, { backgroundColor: accent, flex: cancelLabel ? undefined : 1 }]}>
               <Text style={styles.confirmText}>{confirmLabel}</Text>
             </Pressable>
           </View>

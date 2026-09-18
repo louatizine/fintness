@@ -14,7 +14,7 @@ import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import Svg, { Circle } from 'react-native-svg';
 import { useTranslation } from 'react-i18next';
-import { nutrition } from '../services/api';
+import { nutrition, users } from '../services/api';
 import { radius, spacing, useTheme, useThemedStyles, type ThemeColors } from '../theme';
 import { EmptyState } from '../components/EmptyState';
 import { AppDialog } from '../components/AppDialog';
@@ -120,6 +120,26 @@ function OnboardingCard({ onSaved, onCancel, currentGoals }: OnboardingProps) {
   const [draftWater, setDraftWater] = useState(currentGoals ? String(currentGoals.dailyWater) : '');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [profileReady, setProfileReady] = useState(false);
+
+  useFocusEffect(useCallback(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const profile = await users.getMe();
+        if (cancelled) return;
+        if (profile.age != null) setAge(String(profile.age));
+        if (profile.sex) setSex(profile.sex);
+        if (profile.weightKg != null) setWeightKg(String(profile.weightKg));
+        if (profile.heightCm != null) setHeightCm(String(profile.heightCm));
+      } catch {
+        // Prefill is best-effort; calculator can still collect values manually.
+      } finally {
+        if (!cancelled) setProfileReady(true);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []));
 
   const activityOptions: { id: ActivityLevel; key: string }[] = [
     { id: 'sedentary', key: 'nutrition.sedentary' },
@@ -133,6 +153,14 @@ function OnboardingCard({ onSaved, onCancel, currentGoals }: OnboardingProps) {
     { id: 'maintain', key: 'nutrition.maintain' },
     { id: 'bulk', key: 'nutrition.bulk' },
   ];
+
+  async function syncProfileStats(ageN: number, weightN: number, heightN: number, nextSex: Sex) {
+    try {
+      await users.updateMe({ age: ageN, sex: nextSex, weightKg: weightN, heightCm: heightN });
+    } catch {
+      // Profile sync is secondary to goal calculation/save.
+    }
+  }
 
   async function calculate() {
     setError('');
@@ -150,6 +178,7 @@ function OnboardingCard({ onSaved, onCancel, currentGoals }: OnboardingProps) {
       setDraftCalories(String(result.dailyCalories));
       setDraftProtein(String(result.dailyProtein));
       setDraftWater(String(result.dailyWater));
+      await syncProfileStats(ageN, weightN, heightN, sex);
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     } catch (err) {
       setError(apiErrorMessage(err, t('nutrition.calculateFailed')));
@@ -169,6 +198,12 @@ function OnboardingCard({ onSaved, onCancel, currentGoals }: OnboardingProps) {
     }
     setLoading(true);
     try {
+      const ageN = parseAmount(age);
+      const weightN = parseAmount(weightKg);
+      const heightN = parseAmount(heightCm);
+      if (Number.isFinite(ageN) && Number.isFinite(weightN) && Number.isFinite(heightN)) {
+        await syncProfileStats(ageN, weightN, heightN, sex);
+      }
       await nutrition.saveGoals({ dailyCalories, dailyProtein, dailyWater, goal });
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       onSaved();
@@ -177,6 +212,14 @@ function OnboardingCard({ onSaved, onCancel, currentGoals }: OnboardingProps) {
     } finally {
       setLoading(false);
     }
+  }
+
+  if (!profileReady) {
+    return (
+      <View style={styles.card}>
+        <ScreenSkeleton />
+      </View>
+    );
   }
 
   return (

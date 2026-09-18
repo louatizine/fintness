@@ -4,7 +4,7 @@ import jwt from 'jsonwebtoken';
 import { OAuth2Client } from 'google-auth-library';
 import { ObjectId } from 'mongodb';
 import { getDb } from '../db.js';
-import type { AuthPayload } from '../middleware/auth.js';
+import { requireAuth, type AuthPayload } from '../middleware/auth.js';
 import { parseCoachProfile } from '../coachProfile.js';
 
 export const authRouter = Router();
@@ -204,6 +204,49 @@ authRouter.post('/google', async (req: Request, res: Response) => {
     }
   } catch (err) {
     console.error('Google auth error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+authRouter.post('/change-password', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const currentPassword = typeof req.body?.currentPassword === 'string' ? req.body.currentPassword : '';
+    const newPassword = typeof req.body?.newPassword === 'string' ? req.body.newPassword : '';
+    if (!currentPassword || !newPassword) {
+      res.status(400).json({ error: 'currentPassword and newPassword are required' });
+      return;
+    }
+    if (newPassword.length < 8) {
+      res.status(400).json({ error: 'New password must be at least 8 characters' });
+      return;
+    }
+    if (!/^[a-fA-F0-9]{24}$/.test(req.user!.userId)) {
+      res.status(400).json({ error: 'Invalid user id' });
+      return;
+    }
+    const users = getDb().collection('users');
+    const user = await users.findOne({ _id: new ObjectId(req.user!.userId) }) as UserDoc | null;
+    if (!user) {
+      res.status(404).json({ error: 'User not found' });
+      return;
+    }
+    if (typeof user.password !== 'string' || !user.password) {
+      res.status(400).json({ error: 'This account uses Google sign-in and has no password' });
+      return;
+    }
+    const valid = await bcrypt.compare(currentPassword, user.password);
+    if (!valid) {
+      res.status(401).json({ error: 'Current password is incorrect' });
+      return;
+    }
+    const hash = await bcrypt.hash(newPassword, 12);
+    await users.updateOne(
+      { _id: user._id },
+      { $set: { password: hash, updatedAt: new Date().toISOString() } }
+    );
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Change password error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
 });

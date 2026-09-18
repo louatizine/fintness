@@ -4,6 +4,7 @@ import { useFocusEffect, useNavigation, useRoute, type RouteProp } from '@react-
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useTranslation } from 'react-i18next';
 import { coaches, users } from '../../services/api';
+import { AppDialog } from '../../components/AppDialog';
 import { ScreenSkeleton } from '../../components/Skeleton';
 import { radius, spacing, useTheme, useThemedStyles, type ThemeColors } from '../../theme';
 import { apiErrorMessage, formatDate, formatNumber } from '../../../i18n';
@@ -43,6 +44,7 @@ export function CoachClientDetailScreen() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [info, setInfo] = useState('');
+  const [confirmUnassign, setConfirmUnassign] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -128,6 +130,22 @@ export function CoachClientDetailScreen() {
     }
   }
 
+  async function unassignProgram() {
+    setSaving(true);
+    setError('');
+    setInfo('');
+    try {
+      await coaches.unassignClientProgram(route.params.athleteId);
+      setDetail((current) => (current ? { ...current, program: null } : current));
+      setInfo(t('coaches.planUnassigned', { name: route.params.athleteLabel }));
+    } catch (err) {
+      setError(apiErrorMessage(err, t('coaches.planUnassignFailed')));
+    } finally {
+      setSaving(false);
+      setConfirmUnassign(false);
+    }
+  }
+
   if (loading) return <ScreenSkeleton />;
 
   const goals = detail?.nutritionGoals;
@@ -146,6 +164,17 @@ export function CoachClientDetailScreen() {
 
   return (
     <ScrollView style={styles.screen} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+      <AppDialog
+        visible={confirmUnassign}
+        title={t('coaches.unassignPlanTitle')}
+        body={t('coaches.unassignPlanBody', { name: route.params.athleteLabel, plan: program?.name || '' })}
+        confirmLabel={t('coaches.unassignPlan')}
+        cancelLabel={t('common.cancel')}
+        tone="danger"
+        icon="trash-outline"
+        onCancel={() => setConfirmUnassign(false)}
+        onConfirm={() => void unassignProgram()}
+      />
       <CoachBackRow label={t('common.back')} onPress={() => navigation.goBack()} />
       <Text style={styles.eyebrow}>{t('coaches.clientEyebrow')}</Text>
       <Text style={styles.title}>{detail?.name || route.params.athleteLabel}</Text>
@@ -195,6 +224,15 @@ export function CoachClientDetailScreen() {
           >
             <Text style={styles.secondaryText}>{ownsProgram ? t('coaches.editPlan') : t('coaches.assignPlan')}</Text>
           </Pressable>
+          {ownsProgram ? (
+            <Pressable
+              onPress={() => setConfirmUnassign(true)}
+              disabled={saving}
+              style={[styles.dangerButton, saving && styles.disabled]}
+            >
+              <Text style={styles.dangerButtonText}>{t('coaches.unassignPlan')}</Text>
+            </Pressable>
+          ) : null}
         </View>
       ) : null}
 
@@ -333,6 +371,16 @@ function createStyles(colors: ThemeColors) {
     primaryText: { color: colors.ink, fontWeight: '900' },
     secondary: { marginTop: spacing.md, minHeight: 44, borderColor: colors.gold, borderWidth: 1, alignItems: 'center', justifyContent: 'center', borderRadius: radius.md },
     secondaryText: { color: colors.gold, fontWeight: '800' },
+    dangerButton: {
+      marginTop: spacing.sm,
+      minHeight: 44,
+      borderColor: colors.danger,
+      borderWidth: 1,
+      alignItems: 'center',
+      justifyContent: 'center',
+      borderRadius: radius.md,
+    },
+    dangerButtonText: { color: colors.danger, fontWeight: '800' },
     error: { color: colors.danger, fontSize: 13, marginTop: spacing.sm },
     message: { color: colors.success, fontSize: 13, marginTop: spacing.sm },
     disabled: { opacity: 0.65 },

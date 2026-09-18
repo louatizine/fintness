@@ -54,6 +54,12 @@ module.exports = ({ config }) => {
       infoPlist: {
         ...(config.ios && config.ios.infoPlist),
         NSLocationWhenInUseUsageDescription: LOCATION_WHEN_IN_USE,
+        LSApplicationQueriesSchemes: [
+          ...new Set([
+            ...((config.ios && config.ios.infoPlist && config.ios.infoPlist.LSApplicationQueriesSchemes) || []),
+            'whatsapp',
+          ]),
+        ],
       },
     },
     android: {
