@@ -2,7 +2,7 @@ import { Router, Request, Response } from 'express';
 import { ObjectId } from 'mongodb';
 import { getDb } from '../db.js';
 import { requireAuth } from '../middleware/auth.js';
-import { requireAcceptedCoaching } from '../coachAccess.js';
+import { displayLabelOf, requireAcceptedCoaching } from '../coachAccess.js';
 import { suggestBodyweightReps } from '../bodyweightSuggestion.js';
 import { EQUIPMENT, PROGRAM_TYPES, type Equipment, type ExerciseKind, type NutritionGoalKind, type ProgramType } from '../types.js';
 import { notifyUserPush } from '../push.js';
@@ -171,16 +171,26 @@ async function advanceActiveDay(userId: string, completeSession: boolean) {
   if (days.length === 0) return { error: 'Program has no days', status: 400 as const };
   const currentDayIndex = Number(assignment.currentDayIndex) || 0;
   const nextDayIndex = (currentDayIndex + 1) % days.length;
+  const at = new Date().toISOString();
   if (completeSession) {
     await getDb().collection('workoutSessions').updateMany(
       { userId, userProgramId: assignment._id.toHexString(), dayIndex: currentDayIndex, completedAt: { $exists: false } },
-      { $set: { completedAt: new Date().toISOString() } }
+      { $set: { completedAt: at } }
     );
   }
   await getDb().collection('userPrograms').updateOne(
     { _id: assignment._id },
-    { $set: { currentDayIndex: nextDayIndex, updatedAt: new Date().toISOString() } }
+    { $set: { currentDayIndex: nextDayIndex, updatedAt: at } }
   );
+  // Persist complete/skip for program-aware streaks (calendar rest is implicit; only skips break).
+  await getDb().collection('programDayEvents').insertOne({
+    userId,
+    userProgramId: assignment._id.toHexString(),
+    programId: String(assignment.programId),
+    dayIndex: currentDayIndex,
+    kind: completeSession ? 'complete' : 'skip',
+    at,
+  });
   return { nextDayIndex, assignmentId: assignment._id.toHexString() };
 }
 
@@ -273,14 +283,16 @@ programsRouter.post('/', async (req: Request, res: Response) => {
         userId: assignedToUserId,
         programId: result.insertedId.toHexString(),
         startedAt: now,
+        coachRevisionAt: now,
         active: true,
         currentDayIndex: 0,
       });
+      const coachName = displayLabelOf(creator as { coachProfile?: { displayName?: string }; email?: string } | null);
       notifyUserPush({
         userId: assignedToUserId,
         pref: 'planAssigned',
-        title: 'Training plan updated',
-        body: 'Your coach updated your training plan',
+        title: 'New training plan',
+        body: `Coach ${coachName} assigned you “${name}”`,
         data: { type: 'plan_assigned', kind: 'training', programId: result.insertedId.toHexString() },
       });
     }
@@ -365,6 +377,7 @@ programsRouter.get('/active', async (req: Request, res: Response) => {
         id: assignment._id.toHexString(),
         programId: String(assignment.programId),
         startedAt: assignment.startedAt ?? '',
+        coachRevisionAt: typeof assignment.coachRevisionAt === 'string' ? assignment.coachRevisionAt : null,
         currentDayIndex: dayIndex,
         active: true,
       },
@@ -522,11 +535,19 @@ programsRouter.patch('/:id', async (req: Request, res: Response) => {
     await getDb().collection('programs').updateOne({ _id: id }, { $set: patch });
     const updated = await getDb().collection('programs').findOne({ _id: id });
     if (assignedToUserId && assignedToUserId !== userId) {
+      const revisionAt = typeof patch.updatedAt === 'string' ? patch.updatedAt : new Date().toISOString();
+      await getDb().collection('userPrograms').updateOne(
+        { userId: assignedToUserId, programId: id.toHexString(), active: true },
+        { $set: { coachRevisionAt: revisionAt } }
+      );
+      const coach = await getDb().collection('users').findOne({ _id: asObjectId(userId)! });
+      const coachName = displayLabelOf(coach as { coachProfile?: { displayName?: string }; email?: string } | null);
+      const planName = typeof updated?.name === 'string' ? updated.name : 'your training plan';
       notifyUserPush({
         userId: assignedToUserId,
         pref: 'planAssigned',
         title: 'Training plan updated',
-        body: 'Your coach updated your training plan',
+        body: `Coach ${coachName} updated “${planName}”`,
         data: { type: 'plan_assigned', kind: 'training', programId: id.toHexString() },
       });
     }

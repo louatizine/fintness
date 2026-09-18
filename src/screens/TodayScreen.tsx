@@ -16,6 +16,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Haptics from 'expo-haptics';
 import { useTranslation } from 'react-i18next';
 import { exercises as exercisesApi, programs as programsApi, users, workouts } from '../services/api';
+import { notifyWorkoutStatsChanged } from '../services/workoutStatsEvents';
 import { ExerciseHowToModal, ExerciseThumb, HowToButton } from '../components/ExerciseHowTo';
 import { ProgramPicker } from './ProgramPicker';
 import { EmptyState } from '../components/EmptyState';
@@ -31,8 +32,25 @@ import type { GpsSeedKey, TodayStackParamList } from '../navigation';
 const DEFAULT_LINEUP = ['Front squat', 'Romanian deadlift', 'Hanging knee raise'];
 const MUSCLE_GROUPS = ['legs', 'chest', 'back', 'shoulders', 'core', 'arms', 'cardio'];
 const ACTIVE_SESSION_KEY = 'ironlog.activeWorkoutSession';
+const COACH_PLAN_ACK_KEY = 'ironlog.coachPlanAck';
 
 type StoredSession = { dayKey: string; sessionId: string };
+
+async function readCoachPlanAck(): Promise<string | null> {
+  try {
+    return await AsyncStorage.getItem(COACH_PLAN_ACK_KEY);
+  } catch {
+    return null;
+  }
+}
+
+async function writeCoachPlanAck(token: string) {
+  await AsyncStorage.setItem(COACH_PLAN_ACK_KEY, token);
+}
+
+function coachPlanAckToken(assignmentId: string, revisionAt: string) {
+  return `${assignmentId}:${revisionAt}`;
+}
 
 async function readStoredSession(): Promise<StoredSession | null> {
   try {
@@ -68,9 +86,10 @@ type Draft = {
 };
 
 type ActiveState = {
-  assignment: { id: string; programId: string; startedAt: string; currentDayIndex: number; active: boolean };
+  assignment: { id: string; programId: string; startedAt: string; coachRevisionAt?: string | null; currentDayIndex: number; active: boolean };
   programName: string;
   assignedByCoachName: string | null;
+  createdByCoachId: string | null;
   today: { dayIndex: number; dayLabel: string; exercises: ActiveProgramSlot[] };
 };
 
@@ -256,10 +275,13 @@ export function TodayScreen() {
   const [browsePrograms, setBrowsePrograms] = useState(false);
   const [howTo, setHowTo] = useState<Exercise | null>(null);
   const [pendingDialog, setPendingDialog] = useState<ConfirmState>(null);
+  const [coachPlanAlert, setCoachPlanAlert] = useState<{ coachName: string; programName: string; ackToken: string } | null>(null);
+  const [confirmUnassignPlan, setConfirmUnassignPlan] = useState(false);
   const [manualGps, setManualGps] = useState<Record<string, boolean>>({});
   const dayKey = useRef<string | null>(null);
   const sessionIdRef = useRef<string | null>(null);
   const sessionStartedAt = useRef<string | null>(null);
+  const coachAlertChecked = useRef<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -272,9 +294,35 @@ export function TodayScreen() {
       setLibrary(list);
       setWeightKg(profile?.weightKg ?? null);
       const nextActive = program.assignment && program.today && program.program
-        ? { assignment: program.assignment, programName: program.program.name, assignedByCoachName: program.program.assignedByCoachName ?? null, today: program.today }
+        ? {
+            assignment: program.assignment,
+            programName: program.program.name,
+            assignedByCoachName: program.program.assignedByCoachName ?? null,
+            createdByCoachId: program.program.createdByCoachId ?? null,
+            today: program.today,
+          }
         : null;
       setActive(nextActive);
+
+      if (nextActive?.assignedByCoachName && nextActive.assignment.coachRevisionAt) {
+        const ackToken = coachPlanAckToken(nextActive.assignment.id, nextActive.assignment.coachRevisionAt);
+        if (coachAlertChecked.current !== ackToken) {
+          coachAlertChecked.current = ackToken;
+          const seen = await readCoachPlanAck();
+          if (seen !== ackToken) {
+            setCoachPlanAlert({
+              coachName: nextActive.assignedByCoachName,
+              programName: nextActive.programName,
+              ackToken,
+            });
+          } else {
+            setCoachPlanAlert(null);
+          }
+        }
+      } else {
+        coachAlertChecked.current = null;
+        setCoachPlanAlert(null);
+      }
       const nextKey = nextActive ? `${nextActive.assignment.id}:${nextActive.today.dayIndex}` : 'free';
       const slots = new Map((nextActive?.today.exercises ?? []).map((slot) => [slot.exerciseId, slot]));
       if (dayKey.current !== nextKey) {
@@ -535,15 +583,34 @@ export function TodayScreen() {
     try {
       if (kind === 'complete') {
         const id = await saveUnloggedDrafts();
-        if (id) await workouts.complete(id).catch(() => null);
+        let volumeDelta = 0;
+        let sessionCounted = false;
+        if (id) {
+          const completedSession = await workouts.complete(id).catch(() => null);
+          if (completedSession) {
+            sessionCounted = true;
+            volumeDelta = (completedSession.sets ?? []).reduce((sum, set) => (
+              set.kind === 'cardio' ? sum : sum + (set.weight ?? 0) * (set.reps ?? 0)
+            ), 0);
+          }
+        }
         await programsApi.completeDay();
         await clearStoredSession();
         sessionIdRef.current = null;
         sessionStartedAt.current = null;
         setSessionId(null);
+        notifyWorkoutStatsChanged({
+          optimistic: {
+            sessionId: id ?? undefined,
+            workoutsCompletedDelta: sessionCounted ? 1 : 0,
+            totalVolumeDelta: volumeDelta,
+            streakDelta: 1,
+          },
+        });
         void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       } else {
         await programsApi.skipDay();
+        notifyWorkoutStatsChanged();
       }
       dayKey.current = null;
       await load();
@@ -581,6 +648,23 @@ export function TodayScreen() {
     })();
   }
 
+  async function unassignCoachPlan() {
+    setConfirmUnassignPlan(false);
+    setSaving(true);
+    setError('');
+    try {
+      await programsApi.unassign();
+      dayKey.current = null;
+      coachAlertChecked.current = null;
+      setCoachPlanAlert(null);
+      await load();
+    } catch (err) {
+      setError(apiErrorMessage(err, t('programs.clearFailed')));
+    } finally {
+      setSaving(false);
+    }
+  }
+
   if (loading) return <ScreenSkeleton variant="list" />;
 
   const todayLabel = formatDate(new Date(), { weekday: 'long', month: 'short', day: 'numeric' }).toUpperCase();
@@ -610,13 +694,37 @@ export function TodayScreen() {
         onCancel={() => setPendingDialog(null)}
         onConfirm={runConfirm}
       />
+      <AppDialog
+        visible={Boolean(coachPlanAlert) && !pendingDialog && !confirmUnassignPlan}
+        title={t('today.coachPlanAlertTitle')}
+        body={coachPlanAlert
+          ? t('today.coachPlanAlertBody', { name: coachPlanAlert.coachName, plan: coachPlanAlert.programName })
+          : undefined}
+        confirmLabel={t('common.gotIt')}
+        tone="success"
+        icon="barbell-outline"
+        onConfirm={() => {
+          if (coachPlanAlert) void writeCoachPlanAck(coachPlanAlert.ackToken);
+          setCoachPlanAlert(null);
+        }}
+      />
+      <AppDialog
+        visible={confirmUnassignPlan}
+        title={t('today.unassignPlanTitle')}
+        body={t('today.unassignPlanBody', { plan: active?.programName || '' })}
+        confirmLabel={t('today.unassignPlan')}
+        cancelLabel={t('common.cancel')}
+        tone="danger"
+        icon="close-circle-outline"
+        onCancel={() => setConfirmUnassignPlan(false)}
+        onConfirm={() => void unassignCoachPlan()}
+      />
       <ScrollView style={styles.screen} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
         <View style={styles.header}>
           <View style={{ flex: 1, paddingEnd: spacing.sm }}>
             <Text style={styles.eyebrow}>{todayLabel}</Text>
             <Text style={styles.title}>{active ? active.today.dayLabel : t('today.title')}</Text>
-            {active ? <Text style={styles.programName}>{active.programName}</Text> : null}
-            {active?.assignedByCoachName ? <Text style={styles.programName}>{t('today.assignedByCoach', { name: active.assignedByCoachName })}</Text> : null}
+            {active && !active.assignedByCoachName ? <Text style={styles.programName}>{active.programName}</Text> : null}
           </View>
           <Pressable onPress={() => setBrowsePrograms((open) => !open)} style={styles.programLink}>
             <Text style={styles.programLinkText}>{browsePrograms ? t('today.workout') : active ? t('today.change') : t('today.programs')}</Text>
@@ -627,6 +735,7 @@ export function TodayScreen() {
           <ProgramPicker
             library={library}
             activeProgramId={active?.assignment.programId ?? null}
+            activeCoachName={active?.assignedByCoachName ?? null}
             onClose={() => setBrowsePrograms(false)}
             onChanged={() => {
               setBrowsePrograms(false);
@@ -636,6 +745,24 @@ export function TodayScreen() {
           />
         ) : (
           <>
+            {active?.assignedByCoachName ? (
+              <View style={styles.coachPlanCard}>
+                <View style={styles.coachPlanTop}>
+                  <Ionicons name="person" size={16} color={colors.gold} />
+                  <Text style={styles.coachPlanKicker}>{t('today.coachPlan')}</Text>
+                </View>
+                <Text style={styles.coachPlanTitle}>{active.programName}</Text>
+                <Text style={styles.coachPlanMeta}>{t('today.planByCoach', { name: active.assignedByCoachName })}</Text>
+                <Pressable
+                  onPress={() => setConfirmUnassignPlan(true)}
+                  disabled={saving}
+                  style={styles.coachPlanUnassign}
+                >
+                  <Text style={styles.coachPlanUnassignText}>{t('today.unassignPlan')}</Text>
+                </Pressable>
+              </View>
+            ) : null}
+
             {timer !== null && timer > 0 && (
               <View style={styles.timer}>
                 <Text style={styles.timerLabel}>{t('today.chronos')}</Text>
@@ -798,6 +925,21 @@ export function TodayScreen() {
                       ) : null}
                     </>
                   )}
+                  {Platform.OS !== 'web' && Boolean(active?.createdByCoachId) && Boolean(slot) ? (
+                    <Pressable
+                      onPress={() =>
+                        navigation.navigate('FormCheckRecord', {
+                          exerciseId: exercise.id,
+                          exerciseName: exercise.name,
+                          coachName: active?.assignedByCoachName ?? null,
+                        })
+                      }
+                      style={styles.formCheckButton}
+                    >
+                      <Ionicons name="videocam-outline" size={18} color={colors.gold} />
+                      <Text style={styles.formCheckText}>{t('formCheck.recordButton')}</Text>
+                    </Pressable>
+                  ) : null}
                 </View>
               );
             })}
@@ -880,6 +1022,20 @@ function createStyles(colors: ThemeColors) {
   eyebrow: { color: colors.accent, fontSize: 12, fontWeight: '700', letterSpacing: 1 },
   title: { color: colors.text, fontSize: 28, fontWeight: '800', marginTop: 8 },
   programName: { color: colors.muted, marginTop: 4, fontWeight: '700' },
+  coachPlanCard: {
+    backgroundColor: colors.accentMuted,
+    borderColor: colors.gold,
+    borderWidth: 1,
+    borderRadius: radius.md,
+    padding: spacing.md,
+    marginBottom: spacing.md,
+  },
+  coachPlanTop: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  coachPlanKicker: { color: colors.gold, fontSize: 11, fontWeight: '800', letterSpacing: 1.5 },
+  coachPlanTitle: { color: colors.text, fontSize: 18, fontWeight: '800', marginTop: 8 },
+  coachPlanMeta: { color: colors.muted, fontSize: 13, fontWeight: '700', marginTop: 4 },
+  coachPlanUnassign: { marginTop: spacing.sm, minHeight: 40, justifyContent: 'center' },
+  coachPlanUnassignText: { color: colors.danger, fontWeight: '800', fontSize: 13 },
   programLink: { minHeight: 44, paddingVertical: 8, paddingHorizontal: 4, justifyContent: 'center' },
   programLinkText: { color: colors.gold, fontWeight: '800', fontSize: 13 },
   timer: { backgroundColor: colors.accent, borderRadius: radius.md, padding: spacing.md, marginBottom: spacing.md, flexDirection: 'row', alignItems: 'center', gap: spacing.md },
@@ -915,6 +1071,20 @@ function createStyles(colors: ThemeColors) {
   unit: { color: colors.muted, fontSize: 12 },
   completeButton: { marginTop: spacing.lg, backgroundColor: colors.accent, borderRadius: radius.sm, minHeight: 48, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 8, paddingHorizontal: 12 },
   completeText: { color: colors.ink, fontWeight: '900', textAlign: 'center' },
+  formCheckButton: {
+    marginTop: spacing.md,
+    minHeight: 44,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    borderColor: colors.gold,
+    backgroundColor: colors.accentMuted,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 8,
+    paddingHorizontal: 12,
+  },
+  formCheckText: { color: colors.gold, fontWeight: '800', fontSize: 13 },
   dayActions: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, marginTop: spacing.sm },
   skipDay: { marginTop: spacing.lg, paddingHorizontal: spacing.md, minHeight: 48, justifyContent: 'center' },
   skipDayText: { color: colors.muted, fontWeight: '800' },

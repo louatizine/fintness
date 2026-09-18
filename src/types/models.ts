@@ -106,6 +106,7 @@ export type ActiveProgram = {
     id: string;
     programId: string;
     startedAt: string;
+    coachRevisionAt?: string | null;
     currentDayIndex: number;
     active: boolean;
   };
@@ -227,12 +228,27 @@ export const DEFAULT_NOTIFICATION_PREFS: NotificationPrefs = {
 export type UserProfile = {
   id: string;
   email: string;
+  name: string;
   weightUnit: WeightUnit;
   weightKg: number | null;
+  age: number | null;
+  sex: Sex | null;
+  heightCm: number | null;
+  hasPassword: boolean;
   createdAt: string;
   role: UserRole;
   coachProfile: CoachProfile | null;
   notificationPrefs: NotificationPrefs;
+};
+
+export type UpdateMeInput = {
+  name?: string;
+  weightKg?: number;
+  weightUnit?: WeightUnit;
+  age?: number | null;
+  sex?: Sex | null;
+  heightCm?: number | null;
+  notificationPrefs?: Partial<NotificationPrefs>;
 };
 
 export type PublicCoach = {
@@ -348,10 +364,31 @@ export type WorkoutCalorieSummary = {
   month: CardioPeriodTotal;
 };
 
+export type WorkoutOverviewSession = {
+  sessionId: string;
+  date: string;
+  completedAt: string;
+  dayLabel?: string;
+  volume: number;
+};
+
+export type WorkoutOverviewStreakDay = {
+  date: string;
+  sessionIds: string[];
+  mode: 'program' | 'free';
+};
+
 export type WorkoutSummary = {
   workoutsCompleted: number;
   totalVolume: number;
   streak: number;
+  streakMode: 'program' | 'free';
+  computedAt: string;
+  recentExerciseId: string | null;
+  breakdown: {
+    sessions: WorkoutOverviewSession[];
+    streakDays: WorkoutOverviewStreakDay[];
+  };
 };
 
 export type NutritionGoalKind = 'cut' | 'maintain' | 'bulk';

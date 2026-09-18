@@ -28,12 +28,14 @@ import type {
   SetLog,
   Sex,
   NotificationPrefs,
+  UpdateMeInput,
   UserProfile,
   UserProgram,
   UserRole,
   VideoReportReason,
   WorkoutCalorieSummary,
   WorkoutSession,
+  WorkoutSummary,
 } from '../types/models';
 
 const API_URL = process.env.EXPO_PUBLIC_API_URL;
@@ -147,6 +149,16 @@ export const auth = {
     return role;
   },
 
+  async setRole(next: UserRole) {
+    await persistRole(asRole(next));
+  },
+
+  changePassword: (currentPassword: string, newPassword: string) =>
+    request<{ ok: true }>('/auth/change-password', {
+      method: 'POST',
+      body: JSON.stringify({ currentPassword, newPassword }),
+    }),
+
   async saveToken(t: string) {
     token = t;
     await SecureStore.setItemAsync(TOKEN_KEY, t);
@@ -202,6 +214,12 @@ export const workouts = {
   getProgress: (exerciseId: string) => request<ExerciseProgress>(`/workouts/progress/${exerciseId}`),
   getSummary: (range: { weekFrom: string; weekTo: string; monthFrom: string; monthTo: string }) =>
     request<WorkoutCalorieSummary>(`/workouts/summary?weekFrom=${encodeURIComponent(range.weekFrom)}&weekTo=${encodeURIComponent(range.weekTo)}&monthFrom=${encodeURIComponent(range.monthFrom)}&monthTo=${encodeURIComponent(range.monthTo)}`),
+  getOverview: (timeZone?: string) => {
+    const tz = timeZone
+      ?? (typeof Intl !== 'undefined' ? Intl.DateTimeFormat().resolvedOptions().timeZone : undefined)
+      ?? 'UTC';
+    return request<WorkoutSummary>(`/workouts/summary/overview?timeZone=${encodeURIComponent(tz)}`);
+  },
 };
 
 export const programs = {
@@ -220,14 +238,17 @@ export const programs = {
 
 export const users = {
   getMe: () => request<UserProfile>('/users/me'),
-  updateMe: (data: { weightKg?: number; notificationPrefs?: Partial<NotificationPrefs> }) =>
+  updateMe: (data: UpdateMeInput) =>
     request<UserProfile>('/users/me', { method: 'PATCH', body: JSON.stringify(data) }),
   registerPushToken: (token: string) =>
     request<{ ok: true }>('/users/me/push-token', { method: 'POST', body: JSON.stringify({ token }) }),
   unregisterPushToken: (token: string) =>
     request<{ ok: true }>('/users/me/push-token', { method: 'DELETE', body: JSON.stringify({ token }) }),
-  becomeCoach: (data: Omit<CoachProfile, 'email' | 'phone'> & { email?: string; phone?: string; contactPreference: ContactPreference }) =>
-    request<UserProfile>('/users/become-coach', { method: 'POST', body: JSON.stringify(data) }),
+  async becomeCoach(data: Omit<CoachProfile, 'email' | 'phone'> & { email?: string; phone?: string; contactPreference: ContactPreference }) {
+    const profile = await request<UserProfile>('/users/become-coach', { method: 'POST', body: JSON.stringify(data) });
+    await persistRole(asRole(profile.role));
+    return profile;
+  },
 };
 
 function coachQuery(params: { page?: number; limit?: number; sort?: 'rank' | 'name'; specialty?: string; q?: string } = {}) {
@@ -261,6 +282,8 @@ export const coaches = {
     request<NutritionGoals>(`/coaches/me/clients/${athleteId}/nutrition-goals`, { method: 'POST', body: JSON.stringify(data) }),
   setClientNutritionPlan: (athleteId: string, data: NutritionPlanInput) =>
     request<NutritionPlan>(`/coaches/me/clients/${athleteId}/nutrition-plan`, { method: 'POST', body: JSON.stringify(data) }),
+  unassignClientProgram: (athleteId: string) =>
+    request<{ ok: true }>(`/coaches/me/clients/${athleteId}/unassign-program`, { method: 'POST' }),
 };
 
 export const coachRequests = {

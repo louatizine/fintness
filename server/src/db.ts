@@ -29,6 +29,8 @@ export async function connectDb(): Promise<Db> {
   await db.collection('programs').createIndex({ assignedToUserId: 1 });
   await db.collection('programs').createIndex({ createdByCoachId: 1 });
   await db.collection('userPrograms').createIndex({ userId: 1, active: 1 });
+  await db.collection('programDayEvents').createIndex({ userId: 1, kind: 1, at: -1 });
+  await db.collection('workoutSessions').createIndex({ userId: 1, completedAt: 1 });
   await db.collection('users').createIndex({ role: 1 });
   await db.collection('users').createIndex({ email: 1 }, { unique: true });
   await db.collection('users').createIndex({ googleId: 1 }, { unique: true, sparse: true });

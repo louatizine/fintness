@@ -2,8 +2,10 @@ import { Router, Request, Response } from 'express';
 import { ObjectId } from 'mongodb';
 import { getDb } from '../db.js';
 import { requireAuth } from '../middleware/auth.js';
+import { resolveTimeZone } from '../localDate.js';
 import type { CardioIntensity, ExerciseKind } from '../types.js';
 import { estimateCaloriesBurned } from '../metValues.js';
+import { buildWorkoutOverview } from '../workoutOverview.js';
 
 export const workoutsRouter = Router();
 workoutsRouter.use(requireAuth);
@@ -324,6 +326,17 @@ workoutsRouter.patch('/:id/complete', async (req: Request, res: Response) => {
     res.json((await attachSets(updated ? [updated] : []))[0] ?? { ok: true });
   } catch (err) {
     console.error('Complete workout error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+workoutsRouter.get('/summary/overview', async (req: Request, res: Response) => {
+  try {
+    const timeZone = resolveTimeZone(req.query.timeZone);
+    const overview = await buildWorkoutOverview(getDb(), req.user!.userId, timeZone);
+    res.json(overview);
+  } catch (err) {
+    console.error('Get workout overview error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
